@@ -70,6 +70,26 @@ function Board(){
 
   const isSel=id=>slip.some(s=>s.id===id);
   const toggle=(id,pl)=>setSlip(c=>c.some(s=>s.id===id)?c.filter(s=>s.id!==id):[...c,{id,...pl}]);
+
+  // daily best picks
+  const[dMinP,setDMinP]=useState(0.7),[dMinOdd,setDMinOdd]=useState(1.3),[dSort,setDSort]=useState("prob");
+  const daily=useMemo(()=>{
+    const cand=[];
+    for(const f of fixtures){
+      for(const g of f.groups){
+        if(g.name==="Cornere")continue;              // aproximativ — îl lăsăm afară
+        const best=[...g.picks].sort((a,b)=>b.p-a.p)[0];
+        if(!best)continue;
+        if(best.p>=dMinP && best.odd>=dMinOdd)
+          cand.push({f,group:g.name,label:best.label,p:best.p,odd:best.odd,real:best.real,edge:best.edge});
+      }
+    }
+    cand.sort((a,b)=>dSort==="edge"?((b.edge??-9)-(a.edge??-9)):(b.p-a.p));
+    const byDay={};
+    for(const c of cand){(byDay[c.f.date]=byDay[c.f.date]||[]).push(c);}
+    return Object.keys(byDay).sort().map(d=>({date:d,picks:byDay[d].slice(0,15)}));
+  },[fixtures,dMinP,dMinOdd,dSort]);
+
   const combOdd=slip.reduce((a,s)=>a*s.odd,1), combProb=slip.reduce((a,s)=>a*s.p,1);
   const payout=stake>0?stake*combOdd:0;
   const copySlip=async()=>{const t="Bilet FormaCast\n"+slip.map((s,i)=>`${i+1}. ${s.match} | ${s.label} | ${fx2(s.odd)}`).join("\n")+`\n\nCotă totală: ${fx2(combOdd)}\nȘansă model: ${pct(combProb)}\nMiză: ${stake} → Câștig: ${payout.toFixed(2)}`;
@@ -90,11 +110,55 @@ function Board(){
     </header>
     <div style={wrap}>
       <div style={{display:"flex",gap:8,marginBottom:14}}>
-        {[["matches","Meciuri"],["backtest","Backtest"]].map(([id,l])=>
+        {[["matches","Meciuri"],["daily","Ponturi"],["backtest","Backtest"]].map(([id,l])=>
           <button key={id} onClick={()=>setTab(id)} style={{padding:"8px 16px",borderRadius:9,border:"none",background:tab===id?"var(--accent)":"var(--panel)",color:tab===id?"var(--bg)":"var(--mute)",fontSize:13,fontWeight:600}}>{l}</button>)}
       </div>
 
       {tab==="backtest"&&<Backtest leagues={leagues} panel={panel}/>}
+
+      {tab==="daily"&&<React.Fragment>
+        <div style={{...panel,padding:"14px 15px",marginBottom:14}}>
+          <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>Ponturile zilei</div>
+          <div style={{fontSize:12,color:"var(--mute)",lineHeight:1.6,marginBottom:12}}>Cel mai probabil pont din fiecare piață a fiecărui meci, grupat pe zile. Filtrează după șansă și cotă minimă.</div>
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <div style={{display:"flex",alignItems:"center",gap:7}}>
+              <span style={{fontSize:12,color:"var(--mute)"}}>șansă min</span>
+              <input type="range" min="0.5" max="0.9" step="0.05" value={dMinP} onChange={e=>setDMinP(parseFloat(e.target.value))} style={{width:90}}/>
+              <span className="mono" style={{fontSize:12.5,color:"var(--accent)",width:34}}>{pct(dMinP)}</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:7}}>
+              <span style={{fontSize:12,color:"var(--mute)"}}>cotă min</span>
+              <input type="range" min="1.0" max="2.0" step="0.05" value={dMinOdd} onChange={e=>setDMinOdd(parseFloat(e.target.value))} style={{width:80}}/>
+              <span className="mono" style={{fontSize:12.5,color:"var(--accent)",width:34}}>{fx2(dMinOdd)}</span>
+            </div>
+            <div style={{display:"flex",background:"var(--chip)",border:"1px solid var(--line)",borderRadius:8,overflow:"hidden",marginLeft:"auto"}}>
+              {[["prob","șansă"],["edge","edge"]].map(([id,l])=>
+                <button key={id} onClick={()=>setDSort(id)} style={{padding:"6px 11px",border:"none",background:dSort===id?"var(--panelHi)":"transparent",color:dSort===id?"var(--text)":"var(--mute)",fontSize:12,fontWeight:600}}>{l}</button>)}
+            </div>
+          </div>
+        </div>
+        {daily.length===0&&<div style={{...panel,padding:22,color:"var(--mute)"}}>Niciun pont peste pragurile alese. Coboară șansa sau cota minimă.</div>}
+        {daily.map((day,di)=>{
+          const dd=day.date.split("-"); const label=`${dd[2]}.${dd[1]}`;
+          return <div key={di} style={{marginBottom:16}}>
+            <div style={{fontSize:12,textTransform:"uppercase",letterSpacing:0.8,color:"var(--faint)",margin:"4px 4px 8px"}}>{label} · {day.picks.length} ponturi</div>
+            {day.picks.map((c,ci)=>{const sid=c.f.id+"|"+c.label; const sel=isSel(sid); const col=conf(c.p);
+              return <div key={ci} onClick={()=>toggle(sid,{match:c.f.home+" – "+c.f.away,label:c.label,odd:c.odd,p:c.p,real:c.real})}
+                style={{...panel,marginBottom:8,padding:"11px 13px",display:"flex",alignItems:"center",gap:11,cursor:"pointer",borderColor:sel?"var(--accent)":"var(--line)"}}>
+                <div style={{width:15,height:15,borderRadius:4,border:"1.5px solid "+(sel?"var(--accent)":"var(--line)"),background:sel?"var(--accent)":"transparent",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--bg)",fontWeight:700}}>{sel?"✓":""}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13.5,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.label}</div>
+                  <div style={{fontSize:11,color:"var(--faint)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.f.home} – {c.f.away} · {c.f.league.split(" · ")[0]} · {c.group}</div>
+                </div>
+                <div className="mono" style={{width:40,textAlign:"right",fontSize:15,color:col}}>{pct(c.p)}</div>
+                <div className="mono" style={{width:44,textAlign:"right",fontSize:13,color:c.real?"var(--text)":"var(--mute)"}}>{fx2(c.odd)}</div>
+                <div className="mono" style={{width:36,textAlign:"right",fontSize:12,color:c.edge==null?"var(--faint)":c.edge>0?"var(--strong)":"var(--weak)"}}>{c.edge==null?"–":(c.edge>0?"+":"")+Math.round(c.edge*100)}</div>
+              </div>;})}
+          </div>;
+        })}
+        <div style={{fontSize:11.5,color:"var(--faint)",marginTop:8,lineHeight:1.6}}>Atenție: „șansă mare" ≠ „profit". Ponturile cu 85-90% au cote mici, iar backtestul arată că nici combinate nu bat marja casei. Coloana edge (verde) e mai relevantă decât procentul pur. Nu e sfat financiar.</div>
+      </React.Fragment>}
+
       {tab==="matches"&&<React.Fragment>
       {!data&&!err&&<div style={{...panel,padding:34,textAlign:"center",color:"var(--mute)"}}>Se încarcă datele live…</div>}
       {err&&<div style={{...panel,padding:24,color:"var(--weak)"}}>{err}</div>}
