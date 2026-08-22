@@ -527,6 +527,28 @@ def get_backtest(div: str, edge: float = 0.05):
         return {"status": "running", "div": div}
     return bt
 
+# ---- Romanian live odds: arbitrage + value ----
+import odds_ro
+
+@app.get("/api/odds/arbs")
+def get_arbs():
+    with odds_ro.ODDS_LOCK:
+        return {"updated_at": odds_ro.ODDS_CACHE["updated_at"], "error": odds_ro.ODDS_CACHE["error"],
+                "arbs": odds_ro.ODDS_CACHE["arbs"]}
+
+@app.get("/api/odds/values")
+def get_values():
+    with odds_ro.ODDS_LOCK:
+        return {"updated_at": odds_ro.ODDS_CACHE["updated_at"], "error": odds_ro.ODDS_CACHE["error"],
+                "values": odds_ro.ODDS_CACHE["values"]}
+
+@app.get("/api/odds/debug")
+def get_odds_debug():
+    with odds_ro.ODDS_LOCK:
+        return {"updated_at": odds_ro.ODDS_CACHE["updated_at"], "error": odds_ro.ODDS_CACHE["error"],
+                "books_configured": odds_ro.RO_BOOKS, "key_set": bool(odds_ro.ODDS_KEY),
+                "events": len(odds_ro.ODDS_CACHE["events"]), "raw_sample": odds_ro.ODDS_CACHE["raw_sample"]}
+
 # serve frontend (index.html placed next to this file)
 HERE = os.path.dirname(os.path.abspath(__file__))
 @app.get("/")
@@ -542,6 +564,7 @@ def startup():
     threading.Thread(target=refresh, daemon=True).start()   # first load in background
     threading.Thread(target=keep_alive, daemon=True).start()  # prevent free-tier sleep
     scheduler.add_job(refresh, "interval", hours=REFRESH_HOURS, id="refresh")
+    odds_ro.start_odds_scheduler(scheduler)  # live RO odds: arbitrage + value
     scheduler.start()
 
 @app.on_event("shutdown")

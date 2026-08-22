@@ -109,12 +109,14 @@ function Board(){
       </div>
     </header>
     <div style={wrap}>
-      <div style={{display:"flex",gap:8,marginBottom:14}}>
-        {[["matches","Meciuri"],["daily","Ponturi"],["backtest","Backtest"]].map(([id,l])=>
-          <button key={id} onClick={()=>setTab(id)} style={{padding:"8px 16px",borderRadius:9,border:"none",background:tab===id?"var(--accent)":"var(--panel)",color:tab===id?"var(--bg)":"var(--mute)",fontSize:13,fontWeight:600}}>{l}</button>)}
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+        {[["matches","Meciuri"],["daily","Ponturi"],["arbs","Arbitraj"],["value","Valoare"],["backtest","Backtest"]].map(([id,l])=>
+          <button key={id} onClick={()=>setTab(id)} style={{padding:"8px 14px",borderRadius:9,border:"none",background:tab===id?"var(--accent)":"var(--panel)",color:tab===id?"var(--bg)":"var(--mute)",fontSize:13,fontWeight:600}}>{l}</button>)}
       </div>
 
       {tab==="backtest"&&<Backtest leagues={leagues} panel={panel}/>}
+      {tab==="arbs"&&<Arbs panel={panel}/>}
+      {tab==="value"&&<Values panel={panel}/>}
 
       {tab==="daily"&&<React.Fragment>
         <div style={{...panel,padding:"14px 15px",marginBottom:14}}>
@@ -302,6 +304,69 @@ function Backtest({leagues,panel}){
       </div>}
       <div style={{fontSize:11.5,color:"var(--faint)",marginTop:12,lineHeight:1.6}}>Reper: acuratețea „ghicind favoritul din cotă" e ~50–55%. ROI pozitiv susținut e greu — dacă iese negativ, e semnalul corect că piața e eficientă acolo, nu un bug.</div>
     </React.Fragment>}
+  </div>;
+}
+
+function Arbs({panel}){
+  const[d,setD]=useState(null),[err,setErr]=useState(null),[stake,setStake]=useState(100);
+  useEffect(()=>{fetch(API+"/api/odds/arbs").then(r=>r.json()).then(setD).catch(()=>setErr("eroare rețea"));},[]);
+  const O={H:"1",D:"X",A:"2"};
+  return <div>
+    <div style={{...panel,padding:"14px 15px",marginBottom:14}}>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>Arbitraj (surebets) · case RO</div>
+      <div style={{fontSize:12,color:"var(--mute)",lineHeight:1.6}}>Când suma probabilităților din cele mai bune cote e sub 100%, pariezi pe toate rezultatele la case diferite și câștigi garantat. Se mișcă în secunde — verifică cotele înainte de a pune biletul.</div>
+      <div style={{display:"flex",alignItems:"center",gap:9,marginTop:10}}>
+        <span style={{fontSize:12,color:"var(--mute)"}}>miză totală</span>
+        <input type="number" value={stake} min="1" onChange={e=>setStake(parseFloat(e.target.value)||0)} className="mono" style={{width:90,background:"var(--chip)",color:"var(--text)",border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px",fontSize:14}}/>
+      </div>
+    </div>
+    {err&&<div style={{...panel,padding:18,color:"var(--weak)"}}>{err}</div>}
+    {d&&d.error&&<div style={{...panel,padding:18,color:"var(--mid)"}}>Feed indisponibil: {d.error}<div style={{fontSize:11.5,color:"var(--faint)",marginTop:6}}>Verifică ODDS_API_KEY în Render și /api/odds/debug.</div></div>}
+    {d&&!d.error&&d.arbs&&d.arbs.length===0&&<div style={{...panel,padding:20,color:"var(--mute)"}}>Niciun arbitraj acum. E normal — apar rar și dispar repede. Actualizat: {d.updated_at?new Date(d.updated_at).toLocaleString("ro-RO"):"—"}</div>}
+    {d&&d.arbs&&d.arbs.map((a,i)=>
+      <div key={i} style={{...panel,marginBottom:10,padding:"13px 15px",borderColor:"var(--strong)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+          <div style={{fontSize:14.5,fontWeight:600}}>{a.home} – {a.away}</div>
+          <div className="mono" style={{fontSize:15,color:"var(--strong)"}}>+{a.arb.profit_pct}%</div>
+        </div>
+        <div style={{fontSize:11,color:"var(--faint)",marginBottom:10}}>{a.league||""} profit garantat</div>
+        {["H","D","A"].map(o=>a.best[o]&&
+          <div key={o} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 0",borderTop:"1px solid var(--lineSoft)"}}>
+            <div style={{width:22,fontWeight:700}}>{O[o]}</div>
+            <div style={{flex:1,fontSize:12.5,color:"var(--mute)"}}>{a.best[o].book}</div>
+            <div className="mono" style={{fontSize:13}}>cotă {fx2(a.best[o].odd)}</div>
+            <div className="mono" style={{width:70,textAlign:"right",fontSize:13,color:"var(--accent)"}}>{(stake*a.arb.stakes[o]/100).toFixed(2)}</div>
+          </div>)}
+        <div style={{fontSize:11,color:"var(--faint)",marginTop:8}}>Pui sumele albastre pe fiecare casă. Câștig garantat ≈ {(stake*a.arb.profit_pct/100).toFixed(2)} indiferent de rezultat.</div>
+      </div>)}
+  </div>;
+}
+
+function Values({panel}){
+  const[d,setD]=useState(null),[err,setErr]=useState(null);
+  useEffect(()=>{fetch(API+"/api/odds/values").then(r=>r.json()).then(setD).catch(()=>setErr("eroare rețea"));},[]);
+  const O={H:"1",D:"X",A:"2"};
+  return <div>
+    <div style={{...panel,padding:"14px 15px",marginBottom:14}}>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>Valoare (+EV) · case RO</div>
+      <div style={{fontSize:12,color:"var(--mute)",lineHeight:1.6}}>O casă dă o cotă mai mare decât probabilitatea „adevărată" din consensul caselor RO. „edge" = câștig așteptat pe 1 unitate. „Kelly" = fracția din bankroll de pariat (¼ Kelly, prudent).</div>
+    </div>
+    {err&&<div style={{...panel,padding:18,color:"var(--weak)"}}>{err}</div>}
+    {d&&d.error&&<div style={{...panel,padding:18,color:"var(--mid)"}}>Feed indisponibil: {d.error}</div>}
+    {d&&!d.error&&d.values&&d.values.length===0&&<div style={{...panel,padding:20,color:"var(--mute)"}}>Niciun pariu de valoare acum. Actualizat: {d.updated_at?new Date(d.updated_at).toLocaleString("ro-RO"):"—"}</div>}
+    {d&&d.values&&d.values.map((v,i)=>
+      <div key={i} style={{...panel,marginBottom:8,padding:"12px 14px",display:"flex",alignItems:"center",gap:11}}>
+        <div style={{width:22,fontWeight:700,fontSize:15}}>{O[v.outcome]}</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:13.5,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{v.home} – {v.away}</div>
+          <div style={{fontSize:11,color:"var(--faint)"}}>{v.book} · {v.league||""}</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div className="mono" style={{fontSize:14}}>cotă {fx2(v.odd)}</div>
+          <div className="mono" style={{fontSize:11,color:"var(--strong)"}}>edge +{Math.round(v.edge*100)}% · Kelly {Math.round(v.kelly*100)}%</div>
+        </div>
+      </div>)}
+    <div style={{fontSize:11.5,color:"var(--faint)",marginTop:10,lineHeight:1.6}}>Reper de probabilitate = media caselor RO (nu o casă „sharp" reală, care nu e legală aici), deci semnalul e mai slab decât în piețele mari. Verifică mereu cota înainte de pariu.</div>
   </div>;
 }
 
