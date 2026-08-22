@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>FormaCast</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root{--bg:#0E1520;--bg2:#111C29;--panel:#16212F;--panelHi:#1B2938;--line:#243244;--lineSoft:#1D2A39;
+        --text:#E7EDF3;--mute:#8798AB;--faint:#586B80;--accent:#4FC3E8;--strong:#39B98A;--mid:#E0A82E;--weak:#D9645B;--chip:#0A1119;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  button,input{font-family:inherit}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+  input[type=range]{-webkit-appearance:none;height:4px;background:var(--line);border-radius:4px}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--accent);border:2px solid var(--bg)}
+  .scroll::-webkit-scrollbar{height:0}
+  .row:hover{background:var(--panelHi)}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState, useEffect, useMemo} = React;
+const API = "";  // same origin (served by FastAPI). For a separate host, put the API URL here.
+
+const EMAIL_HASH="b7923bd5fcd894985b13eaefb6ee67cca0935af82532b71ab6a7b4b72be29317";
+const PASS_HASH ="291360373561865051837e7843d6fc7755aaaf08b766638578b7b1ad9644915e";
+async function sha256(s){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));
+  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");}
+
+const pct=p=>Math.round(p*100)+"%";
+const fx2=n=>Number(n).toFixed(2);
+const conf=p=>p>=0.65?"var(--strong)":p>=0.52?"var(--mid)":"var(--weak)";
+const fmtDate=iso=>{const[,m,d]=iso.split("-");return d+"."+m;};
+
+function Bar({p,color}){return <div style={{height:5,background:"var(--chip)",borderRadius:3,overflow:"hidden",flex:1}}>
+  <div style={{width:Math.max(0,Math.min(100,p*100))+"%",height:"100%",background:color,borderRadius:3}}/></div>;}
+
+function Login({onOk}){
+  const[e,setE]=useState(""),[p,setP]=useState(""),[err,setErr]=useState(""),[busy,setBusy]=useState(false);
+  const go=async()=>{setBusy(true);setErr("");
+    try{const[eh,ph]=await Promise.all([sha256(e.trim().toLowerCase()),sha256(p)]);
+      if(eh===EMAIL_HASH&&ph===PASS_HASH)onOk();else setErr("Email sau parolă greșite.");}
+    catch{setErr("Eroare.");}setBusy(false);};
+  const inp={width:"100%",background:"var(--chip)",color:"var(--text)",border:"1px solid var(--line)",borderRadius:9,padding:"12px 13px",fontSize:15,marginBottom:11};
+  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+    <div style={{width:"100%",maxWidth:340}}>
+      <div style={{fontSize:26,fontWeight:700,textAlign:"center",letterSpacing:-0.5}}>Forma<span style={{color:"var(--accent)"}}>·</span>Cast</div>
+      <div style={{fontSize:12.5,color:"var(--mute)",textAlign:"center",margin:"4px 0 22px"}}>Autentificare</div>
+      <input style={inp} type="email" placeholder="email" value={e} autoCapitalize="none" onChange={x=>setE(x.target.value)} onKeyDown={x=>x.key==="Enter"&&go()}/>
+      <input style={inp} type="password" placeholder="parolă" value={p} onChange={x=>setP(x.target.value)} onKeyDown={x=>x.key==="Enter"&&go()}/>
+      {err&&<div style={{color:"var(--weak)",fontSize:12.5,marginBottom:10}}>{err}</div>}
+      <button onClick={go} disabled={busy} style={{width:"100%",padding:12,borderRadius:9,border:"none",background:"var(--accent)",color:"var(--bg)",fontSize:15,fontWeight:700,opacity:busy?0.6:1}}>{busy?"…":"Intră"}</button>
+    </div></div>;
+}
+
+function Board(){
+  const[data,setData]=useState(null),[err,setErr]=useState(null),[divF,setDivF]=useState("ALL");
+  const[open,setOpen]=useState(null),[slip,setSlip]=useState([]),[stake,setStake]=useState(10);
+  const[slipOpen,setSlipOpen]=useState(false),[copied,setCopied]=useState(false);
+  const[tab,setTab]=useState("matches");
+
+  useEffect(()=>{fetch(API+"/api/fixtures").then(r=>r.json()).then(setData).catch(()=>setErr("Nu pot contacta serverul."));},[]);
+  const fixtures=data?data.fixtures:[];
+  const leagues=useMemo(()=>{const s=[];for(const f of fixtures)if(!s.find(x=>x.div===f.div))s.push({div:f.div,league:f.league});return s;},[fixtures]);
+  const list=divF==="ALL"?fixtures:fixtures.filter(f=>f.div===divF);
+
+  const isSel=id=>slip.some(s=>s.id===id);
+  const toggle=(id,pl)=>setSlip(c=>c.some(s=>s.id===id)?c.filter(s=>s.id!==id):[...c,{id,...pl}]);
+  const combOdd=slip.reduce((a,s)=>a*s.odd,1), combProb=slip.reduce((a,s)=>a*s.p,1);
+  const payout=stake>0?stake*combOdd:0;
+  const copySlip=async()=>{const t="Bilet FormaCast\n"+slip.map((s,i)=>`${i+1}. ${s.match} | ${s.label} | ${fx2(s.odd)}`).join("\n")+`\n\nCotă totală: ${fx2(combOdd)}\nȘansă model: ${pct(combProb)}\nMiză: ${stake} → Câștig: ${payout.toFixed(2)}`;
+    try{await navigator.clipboard.writeText(t);setCopied(true);setTimeout(()=>setCopied(false),1600);}catch{}};
+
+  const wrap={maxWidth:900,margin:"0 auto",padding:"0 14px 120px"};
+  const panel={background:"var(--panel)",border:"1px solid var(--line)",borderRadius:12};
+  const chip=a=>({padding:"6px 11px",borderRadius:8,border:"1px solid "+(a?"var(--accent)":"var(--line)"),background:a?"var(--accent)":"transparent",color:a?"var(--bg)":"var(--mute)",fontSize:12.5,fontWeight:600,whiteSpace:"nowrap"});
+
+  return <div>
+    <header style={{borderBottom:"1px solid var(--lineSoft)",background:"var(--bg2)",marginBottom:16}}>
+      <div style={{...wrap,padding:"18px 14px"}}>
+        <div style={{fontSize:20,fontWeight:700,letterSpacing:-0.4}}>Forma<span style={{color:"var(--accent)"}}>·</span>Cast</div>
+        <div style={{fontSize:12,color:"var(--mute)",marginTop:3}}>
+          {data?`${fixtures.length} meciuri · actualizat ${data.updated_at?new Date(data.updated_at).toLocaleString("ro-RO"):"—"}`:err||"se încarcă…"}
+        </div>
+      </div>
+    </header>
+    <div style={wrap}>
+      <div style={{display:"flex",gap:8,marginBottom:14}}>
+        {[["matches","Meciuri"],["backtest","Backtest"]].map(([id,l])=>
+          <button key={id} onClick={()=>setTab(id)} style={{padding:"8px 16px",borderRadius:9,border:"none",background:tab===id?"var(--accent)":"var(--panel)",color:tab===id?"var(--bg)":"var(--mute)",fontSize:13,fontWeight:600}}>{l}</button>)}
+      </div>
+
+      {tab==="backtest"&&<Backtest leagues={leagues} panel={panel}/>}
+      {tab==="matches"&&<React.Fragment>
+      {!data&&!err&&<div style={{...panel,padding:34,textAlign:"center",color:"var(--mute)"}}>Se încarcă datele live…</div>}
+      {err&&<div style={{...panel,padding:24,color:"var(--weak)"}}>{err}</div>}
+      {data&&fixtures.length===0&&<div style={{...panel,padding:30,textAlign:"center",color:"var(--mute)"}}>Serverul încă antrenează modelele sau nu sunt meciuri viitoare. Reîncearcă în câteva minute.</div>}
+
+      {fixtures.length>0&&<div className="scroll" style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:12}}>
+        <button onClick={()=>setDivF("ALL")} style={chip(divF==="ALL")}>Toate</button>
+        {leagues.map(l=><button key={l.div} onClick={()=>setDivF(l.div)} style={chip(divF===l.div)}>{l.league.split(" · ")[0]}</button>)}
+      </div>}
+
+      {list.map(f=>{
+        const id=f.id, isOpen=open===id;
+        const res=f.groups[0].picks; const one=[...res.slice(0,3)].sort((a,b)=>b.p-a.p)[0];
+        const c=conf(one.p);
+        return <div key={id} style={{...panel,marginBottom:9,overflow:"hidden"}}>
+          <div className="row" onClick={()=>setOpen(isOpen?null:id)} style={{padding:"12px 14px",cursor:"pointer"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+              <div style={{fontSize:15,fontWeight:600}}>{f.home} <span style={{color:"var(--faint)",fontWeight:400}}>–</span> {f.away}</div>
+              <div className="mono" style={{fontSize:10.5,color:"var(--faint)"}}>{f.league.split(" · ")[0]} · {fmtDate(f.date)}</div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:12,marginTop:8}}>
+              <span className="mono" style={{fontSize:12.5,color:"var(--mute)"}}>xG {f.lh}–{f.la}</span>
+              <span style={{fontSize:12.5,color:"var(--mute)"}}>favorit <b style={{color:c}}>{one.label}</b> {pct(one.p)}</span>
+              <span style={{marginLeft:"auto",fontSize:11,color:"var(--faint)"}}>{isOpen?"▲":"▼ piețe"}</span>
+            </div>
+          </div>
+          {isOpen&&<div style={{padding:"4px 14px 16px",borderTop:"1px solid var(--lineSoft)"}}>
+            <div style={{display:"flex",fontSize:9.5,color:"var(--faint)",textTransform:"uppercase",letterSpacing:0.5,marginTop:6,paddingRight:6}}>
+              <span style={{marginLeft:"auto",width:36,textAlign:"right"}}>%</span><span style={{width:44,textAlign:"right"}}>cotă</span><span style={{width:40,textAlign:"right"}}>edge</span>
+            </div>
+            {f.groups.map((g,gi)=><div key={gi} style={{marginTop:14}}>
+              <div style={{fontSize:10.5,textTransform:"uppercase",letterSpacing:0.8,color:"var(--mute)",marginBottom:9,display:"flex",justifyContent:"space-between"}}>
+                <span>{g.name}</span>{g.note&&<span style={{color:"var(--faint)",textTransform:"none"}}>{g.note}</span>}</div>
+              {g.picks.map((pk,pi)=>{const sid=id+"|"+pk.label; const sel=isSel(sid); const cc=conf(pk.p);
+                return <div key={pi} onClick={()=>toggle(sid,{match:f.home+" – "+f.away,label:pk.label,odd:pk.odd,p:pk.p,real:pk.real})}
+                  style={{display:"flex",alignItems:"center",gap:9,marginBottom:5,cursor:"pointer",background:sel?"var(--panelHi)":"transparent",border:"1px solid "+(sel?"var(--accent)":"transparent"),borderRadius:7,padding:"3px 6px",margin:"0 -6px 4px"}}>
+                  <div style={{width:15,height:15,borderRadius:4,border:"1.5px solid "+(sel?"var(--accent)":"var(--line)"),background:sel?"var(--accent)":"transparent",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--bg)",fontWeight:700}}>{sel?"✓":""}</div>
+                  <div style={{width:104,fontSize:12.5,color:"var(--mute)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pk.label}</div>
+                  <Bar p={pk.p} color={cc}/>
+                  <div className="mono" style={{width:36,textAlign:"right",fontSize:12.5,color:cc}}>{pct(pk.p)}</div>
+                  <div className="mono" style={{width:44,textAlign:"right",fontSize:13,color:pk.real?"var(--text)":"var(--mute)"}}>{fx2(pk.odd)}</div>
+                  <div className="mono" style={{width:40,textAlign:"right",fontSize:12,color:pk.edge==null?"var(--faint)":pk.edge>0?"var(--strong)":"var(--weak)"}}>{pk.edge==null?"–":(pk.edge>0?"+":"")+Math.round(pk.edge*100)}</div>
+                </div>;})}
+            </div>)}
+            <div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}}>
+              {f.scores.map((s,j)=><span key={j} className="mono" style={{fontSize:11.5,background:"var(--chip)",border:"1px solid var(--line)",borderRadius:6,padding:"3px 7px",color:"var(--mute)"}}>{s.x}-{s.y} {pct(s.p)}</span>)}
+            </div>
+            <div style={{fontSize:10.5,color:"var(--faint)",marginTop:10,lineHeight:1.5}}>Cotele reale (alb) vin din piață; cele gri sunt din model + marjă. „edge" = model − piață (pozitiv = posibilă valoare).</div>
+          </div>}
+        </div>;
+      })}
+
+      </React.Fragment>}
+
+      <div style={{marginTop:22,fontSize:11.5,color:"var(--faint)",lineHeight:1.7,borderTop:"1px solid var(--lineSoft)",paddingTop:14}}>
+        Model Dixon-Coles antrenat pe rezultate reale (full-time + repriza întâi) și cornere reale, reîmprospătat automat de pe football-data.co.uk. Doar meciurile de azi înainte. Selecțiile din același meci sunt corelate. Nu e sfat financiar. Pariază responsabil.
+      </div>
+    </div>
+
+    {slip.length>0&&<div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:50}}>
+      {slipOpen&&<div style={{maxWidth:900,margin:"0 auto",background:"var(--bg2)",border:"1px solid var(--line)",borderTopLeftRadius:14,borderTopRightRadius:14,padding:"14px 14px 8px",maxHeight:"60vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <b style={{fontSize:14}}>Biletul tău</b>
+          <button onClick={()=>setSlip([])} style={{fontSize:11.5,background:"none",border:"1px solid var(--line)",borderRadius:7,padding:"4px 9px",color:"var(--weak)"}}>golește</button>
+        </div>
+        {slip.map(s=><div key={s.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:"1px solid var(--lineSoft)"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:12.5,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.label}</div>
+            <div style={{fontSize:10.5,color:"var(--faint)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.match}</div>
+          </div>
+          <span className="mono" style={{fontSize:13,color:s.real?"var(--text)":"var(--mute)"}}>{fx2(s.odd)}</span>
+          <button onClick={()=>setSlip(c=>c.filter(x=>x.id!==s.id))} style={{background:"none",border:"none",color:"var(--faint)",fontSize:16}}>×</button>
+        </div>)}
+        <div style={{display:"flex",alignItems:"center",gap:10,marginTop:12}}>
+          <span style={{fontSize:12.5,color:"var(--mute)"}}>miză</span>
+          <input type="number" value={stake} min="0" onChange={e=>setStake(parseFloat(e.target.value)||0)} className="mono" style={{width:80,background:"var(--chip)",color:"var(--text)",border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px",fontSize:14}}/>
+          <button onClick={copySlip} style={{marginLeft:"auto",fontSize:12.5,background:"var(--panel)",border:"1px solid var(--line)",borderRadius:8,padding:"8px 12px",color:copied?"var(--strong)":"var(--text)",fontWeight:600}}>{copied?"✓ copiat":"copiază biletul"}</button>
+        </div>
+      </div>}
+      <div onClick={()=>setSlipOpen(o=>!o)} style={{maxWidth:900,margin:"0 auto",background:"var(--accent)",color:"var(--bg)",padding:"13px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}>
+        <b style={{fontSize:13}}>Bilet · {slip.length}</b>
+        <span className="mono" style={{fontSize:13}}>cotă {fx2(combOdd)}</span>
+        <span className="mono" style={{marginLeft:"auto",fontSize:13,fontWeight:700}}>{slipOpen?"▼":"▲"} câștig {payout.toFixed(2)}</span>
+      </div>
+    </div>}
+  </div>;
+}
+
+function Backtest({leagues,panel}){
+  const[div,setDiv]=useState(leagues[0]?leagues[0].div:"E0");
+  const[edge,setEdge]=useState(0.05),[bt,setBt]=useState(null),[running,setRunning]=useState(false);
+  const poll=React.useRef(null);
+  useEffect(()=>()=>clearInterval(poll.current),[]);
+  const run=()=>{
+    setBt({status:"running"});setRunning(true);clearInterval(poll.current);
+    const tick=()=>fetch(`${API}/api/backtest?div=${div}&edge=${edge}`).then(r=>r.json()).then(d=>{
+      setBt(d); if(d.status!=="running"){clearInterval(poll.current);setRunning(false);}
+    }).catch(()=>{clearInterval(poll.current);setRunning(false);setBt({status:"error",error:"eroare rețea"});});
+    tick(); poll.current=setInterval(tick,3000);
+  };
+  const M=(label,val,sub,color)=><div style={{...panel,padding:"13px 15px"}}>
+    <div style={{fontSize:10,textTransform:"uppercase",letterSpacing:0.6,color:"var(--faint)"}}>{label}</div>
+    <div className="mono" style={{fontSize:24,color:color||"var(--text)",marginTop:5}}>{val}</div>
+    {sub&&<div style={{fontSize:11,color:"var(--mute)",marginTop:2}}>{sub}</div>}</div>;
+  const eq=bt&&bt.equity&&bt.equity.length>1?bt.equity:null;
+  let poly="",zeroY=0,up=true;
+  if(eq){const mn=Math.min(0,...eq),mx=Math.max(0,...eq),rg=(mx-mn)||1;
+    poly=eq.map((v,i)=>`${(10+i/(eq.length-1)*980).toFixed(1)},${(10+(1-(v-mn)/rg)*160).toFixed(1)}`).join(" ");
+    zeroY=10+(1-(0-mn)/rg)*160; up=eq[eq.length-1]>=0;}
+  return <div>
+    <div style={{...panel,padding:"16px 16px",marginBottom:16}}>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>Validare walk-forward</div>
+      <div style={{fontSize:12.5,color:"var(--mute)",lineHeight:1.6,marginBottom:14}}>Modelul e reantrenat înainte de fiecare etapă și prezice „în orb". Îți arată acuratețea reală și randamentul dacă ai fi pariat pick-urile cu edge peste prag, la cotele istorice.</div>
+      <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+        <select value={div} onChange={e=>setDiv(e.target.value)} style={{background:"var(--chip)",color:"var(--text)",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",fontSize:13.5}}>
+          {(leagues.length?leagues:[{div:"E0",league:"Anglia · Premier League"}]).map(l=><option key={l.div} value={l.div}>{l.league}</option>)}
+        </select>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:12,color:"var(--mute)"}}>edge min</span>
+          <input type="range" min="0" max="0.2" step="0.01" value={edge} onChange={e=>setEdge(parseFloat(e.target.value))} style={{width:100}} disabled={running}/>
+          <span className="mono" style={{fontSize:13,color:"var(--accent)",width:36}}>{Math.round(edge*100)}%</span>
+        </div>
+        <button onClick={run} disabled={running} style={{marginLeft:"auto",padding:"9px 16px",borderRadius:9,border:"none",background:running?"var(--line)":"var(--accent)",color:running?"var(--faint)":"var(--bg)",fontSize:13,fontWeight:700}}>{running?"rulează…":"rulează backtest"}</button>
+      </div>
+    </div>
+    {bt&&bt.status==="running"&&<div style={{...panel,padding:20,color:"var(--mute)"}}>Se antrenează și se testează… (poate dura 30–90s pe planul gratuit)</div>}
+    {bt&&bt.status==="error"&&<div style={{...panel,padding:20,color:"var(--weak)"}}>{bt.error||"eroare"}</div>}
+    {bt&&bt.status==="done"&&<React.Fragment>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        {M("Acuratețe 1X2",Math.round(bt.acc*100)+"%",bt.correct+"/"+bt.tested,"var(--accent)")}
+        {M("ROI (value)",(bt.roi>=0?"+":"")+(bt.roi*100).toFixed(1)+"%",bt.bets+" pariuri",bt.roi>=0?"var(--strong)":"var(--weak)")}
+        {M("Log-loss",bt.logloss,"mai mic = mai bun")}
+        {M("Profit",(bt.profit>=0?"+":"")+bt.profit+"u","mize de 1u",bt.profit>=0?"var(--strong)":"var(--weak)")}
+      </div>
+      {eq&&<div style={{...panel,padding:"14px 15px"}}>
+        <div style={{fontSize:10,textTransform:"uppercase",letterSpacing:0.6,color:"var(--faint)",marginBottom:8}}>Curba de profit (unități)</div>
+        <svg viewBox="0 0 1000 180" style={{width:"100%",height:170}} preserveAspectRatio="none">
+          <line x1="10" y1={zeroY} x2="990" y2={zeroY} stroke="var(--line)" strokeWidth="1" strokeDasharray="4 4"/>
+          <polyline points={poly} fill="none" stroke={up?"var(--strong)":"var(--weak)"} strokeWidth="2"/>
+        </svg>
+      </div>}
+      <div style={{fontSize:11.5,color:"var(--faint)",marginTop:12,lineHeight:1.6}}>Reper: acuratețea „ghicind favoritul din cotă" e ~50–55%. ROI pozitiv susținut e greu — dacă iese negativ, e semnalul corect că piața e eficientă acolo, nu un bug.</div>
+    </React.Fragment>}
+  </div>;
+}
+
+function App(){const[a,setA]=useState(false);return a?<Board/>:<Login onOk={()=>setA(true)}/>;}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
