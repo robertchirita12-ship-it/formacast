@@ -21,6 +21,7 @@ from typing import Dict, List, Optional
 import requests
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+import kickoffs
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -391,6 +392,7 @@ def refresh():
                 out_fixtures.append({
                     "id": fid, "div": div, "league": name,
                     "date": f["date"].isoformat(), "home": f["home"], "away": f["away"],
+                    "kickoff": kickoffs.kickoff_for(f["home"], f["away"], f["date"].isoformat()),
                     **mk,
                 })
 
@@ -573,6 +575,11 @@ def get_live_radar():
         updated = CACHE["updated_at"]
     return {"updated_at": updated, "targets": live_radar()}
 
+@app.get("/api/kickoffs/debug")
+def get_kickoffs_debug():
+    with kickoffs.KICK_LOCK:
+        return {**kickoffs.KICK_STATE, "key_set": bool(kickoffs.AF_KEY), "tz": kickoffs.TZ}
+
 # serve frontend (index.html placed next to this file)
 HERE = os.path.dirname(os.path.abspath(__file__))
 @app.get("/")
@@ -588,6 +595,7 @@ def startup():
     threading.Thread(target=refresh, daemon=True).start()   # first load in background
     threading.Thread(target=keep_alive, daemon=True).start()  # prevent free-tier sleep
     scheduler.add_job(refresh, "interval", hours=REFRESH_HOURS, id="refresh")
+    kickoffs.start_kickoff_scheduler(scheduler)  # kickoff times from API-Football
     scheduler.start()
 
 @app.on_event("shutdown")

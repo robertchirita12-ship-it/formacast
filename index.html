@@ -35,6 +35,7 @@ const pct=p=>Math.round(p*100)+"%";
 const fx2=n=>Number(n).toFixed(2);
 const conf=p=>p>=0.65?"var(--strong)":p>=0.52?"var(--mid)":"var(--weak)";
 const fmtDate=iso=>{const[,m,d]=iso.split("-");return d+"."+m;};
+const fmtKick=iso=>{if(!iso)return null;try{const t=new Date(iso);return t.toLocaleTimeString("ro-RO",{hour:"2-digit",minute:"2-digit"});}catch{return null;}};
 
 function Bar({p,color}){return <div style={{height:5,background:"var(--chip)",borderRadius:3,overflow:"hidden",flex:1}}>
   <div style={{width:Math.max(0,Math.min(100,p*100))+"%",height:"100%",background:color,borderRadius:3}}/></div>;}
@@ -178,7 +179,7 @@ function Board(){
           <div className="row" onClick={()=>setOpen(isOpen?null:id)} style={{padding:"12px 14px",cursor:"pointer"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
               <div style={{fontSize:15,fontWeight:600}}>{f.home} <span style={{color:"var(--faint)",fontWeight:400}}>–</span> {f.away}</div>
-              <div className="mono" style={{fontSize:10.5,color:"var(--faint)"}}>{f.league.split(" · ")[0]} · {fmtDate(f.date)}</div>
+              <div className="mono" style={{fontSize:10.5,color:"var(--faint)"}}>{f.league.split(" · ")[0]} · {fmtDate(f.date)}{fmtKick(f.kickoff)?" · "+fmtKick(f.kickoff):""}</div>
             </div>
             <div style={{display:"flex",alignItems:"center",gap:12,marginTop:8}}>
               <span className="mono" style={{fontSize:12.5,color:"var(--mute)"}}>xG {f.lh}–{f.la}</span>
@@ -237,7 +238,9 @@ function Board(){
           <span style={{fontSize:12.5,color:"var(--mute)"}}>miză</span>
           <input type="number" value={stake} min="0" onChange={e=>setStake(parseFloat(e.target.value)||0)} className="mono" style={{width:80,background:"var(--chip)",color:"var(--text)",border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px",fontSize:14}}/>
           <button onClick={copySlip} style={{marginLeft:"auto",fontSize:12.5,background:"var(--panel)",border:"1px solid var(--line)",borderRadius:8,padding:"8px 12px",color:copied?"var(--strong)":"var(--text)",fontWeight:600}}>{copied?"✓ copiat":"copiază biletul"}</button>
+          <button onClick={async()=>{await copySlip();window.open("https://www.superbet.ro","_blank");}} style={{fontSize:12.5,background:"var(--accent)",border:"none",borderRadius:8,padding:"8px 12px",color:"var(--bg)",fontWeight:700}}>Superbet →</button>
         </div>
+        <div style={{fontSize:10.5,color:"var(--faint)",marginTop:8,lineHeight:1.5}}>„Superbet →" copiază biletul și deschide site-ul. Selecțiile le adaugi tu manual acolo — casele nu permit completarea biletului din exterior.</div>
       </div>}
       <div onClick={()=>setSlipOpen(o=>!o)} style={{maxWidth:900,margin:"0 auto",background:"var(--accent)",color:"var(--bg)",padding:"13px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}>
         <b style={{fontSize:13}}>Bilet · {slip.length}</b>
