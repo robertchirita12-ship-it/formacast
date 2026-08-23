@@ -22,6 +22,7 @@ import requests
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import kickoffs
+import journal
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -400,6 +401,12 @@ def refresh():
         with LOCK:
             CACHE.update({"updated_at": datetime.utcnow().isoformat() + "Z",
                           "leagues": out_leagues, "fixtures": out_fixtures, "error": None})
+        # prediction journal: record new pre-match forecasts, settle any now played
+        try:
+            journal.record(out_fixtures)
+            journal.settle(HIST)
+        except Exception as je:  # never let the journal break a refresh
+            print("journal hook error:", je)
     except Exception as e:  # noqa
         with LOCK:
             CACHE["error"] = str(e)
@@ -580,6 +587,19 @@ def get_kickoffs_debug():
     with kickoffs.KICK_LOCK:
         return {**kickoffs.KICK_STATE, "key_set": bool(kickoffs.AF_KEY), "tz": kickoffs.TZ}
 
+@app.get("/api/journal")
+def get_journal(limit: int = Query(100, ge=1, le=500), settled: bool = False):
+    return {"entries": journal.entries(limit=limit, only_settled=settled),
+            "backend": journal.STATE["backend"]}
+
+@app.get("/api/journal/stats")
+def get_journal_stats():
+    return journal.stats()
+
+@app.get("/api/journal/debug")
+def get_journal_debug():
+    return journal.STATE
+
 # ----------------------------------------------------------------------------
 # PWA: manifest, icons (base64-embedded so no binary files to upload), service worker
 # ----------------------------------------------------------------------------
@@ -657,6 +677,7 @@ scheduler = BackgroundScheduler(daemon=True)
 
 @app.on_event("startup")
 def startup():
+    journal.init()  # prediction journal storage
     threading.Thread(target=refresh, daemon=True).start()   # first load in background
     threading.Thread(target=keep_alive, daemon=True).start()  # prevent free-tier sleep
     scheduler.add_job(refresh, "interval", hours=REFRESH_HOURS, id="refresh")

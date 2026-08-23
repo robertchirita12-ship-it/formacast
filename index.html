@@ -118,12 +118,13 @@ function Board(){
     </header>
     <div style={wrap}>
       <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
-        {[["matches","Meciuri"],["daily","Ponturi"],["live","Live radar"],["backtest","Backtest"]].map(([id,l])=>
+        {[["matches","Meciuri"],["daily","Ponturi"],["live","Live radar"],["journal","Jurnal"],["backtest","Backtest"]].map(([id,l])=>
           <button key={id} onClick={()=>setTab(id)} style={{padding:"8px 14px",borderRadius:9,border:"none",background:tab===id?"var(--accent)":"var(--panel)",color:tab===id?"var(--bg)":"var(--mute)",fontSize:13,fontWeight:600}}>{l}</button>)}
       </div>
 
       {tab==="backtest"&&<Backtest leagues={leagues} panel={panel}/>}
       {tab==="live"&&<LiveRadar panel={panel}/>}
+      {tab==="journal"&&<Journal panel={panel}/>}
 
       {tab==="daily"&&<React.Fragment>
         <div style={{...panel,padding:"14px 15px",marginBottom:14}}>
@@ -314,6 +315,89 @@ function Backtest({leagues,panel}){
       <div style={{fontSize:11.5,color:"var(--faint)",marginTop:12,lineHeight:1.6}}>Reper: acuratețea „ghicind favoritul din cotă" e ~50–55%. ROI pozitiv susținut e greu — dacă iese negativ, e semnalul corect că piața e eficientă acolo, nu un bug.</div>
     </React.Fragment>}
   </div>;
+}
+
+function Journal({panel}){
+  const[s,setS]=useState(null);const[e,setE]=useState(null);const[err,setErr]=useState(null);
+  const[showAll,setShowAll]=useState(false);
+  useEffect(()=>{
+    fetch(API+"/api/journal/stats").then(r=>r.json()).then(setS).catch(()=>setErr("eroare rețea"));
+    fetch(API+"/api/journal?limit=80").then(r=>r.json()).then(d=>setE(d.entries||[])).catch(()=>{});
+  },[]);
+  const pct=x=>x==null?"–":Math.round(x*100)+"%";
+  const cell={fontSize:12.5,padding:"2px 0"};
+  if(err)return <div style={{...panel,padding:18,color:"var(--weak)"}}>{err}</div>;
+  if(!s)return <div style={{...panel,padding:18,color:"var(--mute)"}}>Se încarcă jurnalul…</div>;
+  const settled=s.settled||0;
+  const list=(e||[]).filter(x=>showAll||x.result!=null);
+  return <React.Fragment>
+    <div style={{...panel,padding:"14px 15px",marginBottom:12}}>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>Jurnal de predicții · track record real</div>
+      <div style={{fontSize:12,color:"var(--mute)",lineHeight:1.6}}>Fiecare predicție e salvată înainte de meci și comparată cu rezultatul real. Cifrele de aici sunt istoricul TĂU, nu backtest teoretic. Se adună în timp.</div>
+    </div>
+    {settled===0?
+      <div style={{...panel,padding:20,color:"var(--mute)",lineHeight:1.6}}>
+        <b style={{color:"var(--text)"}}>{s.total||0}</b> predicții înregistrate, niciuna închisă încă.<br/>
+        Revino după ce se joacă meciurile — atunci apar acuratețea și calibrarea.
+      </div>
+    :
+      <React.Fragment>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:12}}>
+          <div style={{...panel,padding:"12px 14px"}}>
+            <div style={{fontSize:11,color:"var(--faint)"}}>Acuratețe 1X2</div>
+            <div className="mono" style={{fontSize:22,fontWeight:700,color:"var(--accent)"}}>{pct(s.acc1x2)}</div>
+            <div style={{fontSize:10.5,color:"var(--faint)"}}>{settled} meciuri închise</div>
+          </div>
+          <div style={{...panel,padding:"12px 14px"}}>
+            <div style={{fontSize:11,color:"var(--faint)"}}>Brier (mai mic = mai bun)</div>
+            <div className="mono" style={{fontSize:22,fontWeight:700}}>{s.brier}</div>
+            <div style={{fontSize:10.5,color:"var(--faint)"}}>{s.pending} în așteptare</div>
+          </div>
+        </div>
+        <div style={{...panel,padding:"12px 14px",marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Calibrare — cât de sincer prezice modelul</div>
+          {[["Peste 2.5 goluri",s.over25],["Ambele înscriu",s.btts]].map(([lbl,o])=>o&&
+            <div key={lbl} style={{display:"flex",justifyContent:"space-between",...cell}}>
+              <span style={{color:"var(--mute)"}}>{lbl}</span>
+              <span className="mono">prezis {pct(o.pred)} · real <b style={{color:Math.abs((o.pred||0)-(o.real||0))<0.06?"var(--strong)":"var(--mid)"}}>{pct(o.real)}</b> <span style={{color:"var(--faint)"}}>({o.n})</span></span>
+            </div>)}
+          <div style={{fontSize:10.5,color:"var(--faint)",marginTop:8,lineHeight:1.5}}>Dacă „prezis" și „real" sunt apropiate, modelul e cinstit cu tine. Diferențe mari = supra/subestimează.</div>
+        </div>
+        {s.per_league&&s.per_league.length>0&&
+          <div style={{...panel,padding:"12px 14px",marginBottom:12}}>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Acuratețe pe ligă</div>
+            {s.per_league.map(l=>
+              <div key={l.league} style={{display:"flex",justifyContent:"space-between",...cell}}>
+                <span style={{color:"var(--mute)"}}>{l.league}</span>
+                <span className="mono"><b style={{color:l.acc>=0.5?"var(--strong)":"var(--text)"}}>{pct(l.acc)}</b> <span style={{color:"var(--faint)"}}>({l.n})</span></span>
+              </div>)}
+          </div>}
+      </React.Fragment>
+    }
+    <div style={{display:"flex",alignItems:"center",gap:10,margin:"4px 2px 10px"}}>
+      <div style={{fontSize:13,fontWeight:700}}>Predicții</div>
+      <button onClick={()=>setShowAll(!showAll)} style={{marginLeft:"auto",fontSize:12,background:"var(--panel)",border:"1px solid var(--line)",borderRadius:8,padding:"6px 10px",color:"var(--mute)"}}>{showAll?"doar închise":"arată toate"}</button>
+    </div>
+    {list.length===0?
+      <div style={{...panel,padding:18,color:"var(--mute)"}}>Nimic de arătat încă.</div>
+      :list.map((x,i)=>{
+        const done=x.result!=null;
+        const ok=x.correct1x2===1;
+        return <div key={i} style={{...panel,marginBottom:8,padding:"11px 14px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+            <div style={{fontSize:14,fontWeight:600}}>{x.home} – {x.away}</div>
+            {done?
+              <span className="mono" style={{fontSize:12.5,color:ok?"var(--strong)":"var(--weak)"}}>{ok?"✓":"✗"} {x.fthg}-{x.ftag}</span>
+              :<span style={{fontSize:11,color:"var(--faint)"}}>în așteptare</span>}
+          </div>
+          <div style={{fontSize:11.5,color:"var(--faint)",marginTop:3}}>
+            {(x.league||"").split(" · ")[0]} · prezis <b style={{color:"var(--mute)"}}>{x.fav}</b> ({pct(x.fav_p)})
+            {done&&<span> · a ieșit <b style={{color:"var(--mute)"}}>{x.result}</b></span>}
+          </div>
+        </div>;
+      })}
+    <div style={{fontSize:10.5,color:"var(--faint)",textAlign:"center",marginTop:10,lineHeight:1.5}}>Stocare: se adună la fiecare actualizare. Pentru istoric permanent (peste redeploy), leagă o bază de date — vezi /api/journal/debug.</div>
+  </React.Fragment>;
 }
 
 function LiveRadar({panel}){
