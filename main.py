@@ -32,16 +32,22 @@ BASE = "https://www.football-data.co.uk"
 # div code -> (nice name, [season codes, newest last]).  Season "2526" = 2025/26.
 LEAGUES = {
     "E0":  ("Anglia · Premier League",   ["2425", "2526"]),
+    "E1":  ("Anglia · Championship",      ["2425", "2526"]),
     "SP1": ("Spania · La Liga",          ["2425", "2526"]),
+    "SP2": ("Spania · La Liga 2",        ["2425", "2526"]),
     "I1":  ("Italia · Serie A",          ["2425", "2526"]),
+    "I2":  ("Italia · Serie B",          ["2425", "2526"]),
     "D1":  ("Germania · Bundesliga",     ["2425", "2526"]),
+    "D2":  ("Germania · Bundesliga 2",   ["2425", "2526"]),
     "F1":  ("Franța · Ligue 1",          ["2425", "2526"]),
+    "F2":  ("Franța · Ligue 2",          ["2425", "2526"]),
     "N1":  ("Olanda · Eredivisie",       ["2425", "2526"]),
     "P1":  ("Portugalia · Primeira Liga",["2425", "2526"]),
     "T1":  ("Turcia · Super Lig",        ["2425", "2526"]),
     "B1":  ("Belgia · Jupiler Pro League",["2425", "2526"]),
     "G1":  ("Grecia · Super League",     ["2425", "2526"]),
     "SC0": ("Scoția · Premiership",      ["2425", "2526"]),
+    "SC1": ("Scoția · Championship",     ["2425", "2526"]),
 }
 HALF_LIFE_DAYS = 180      # time-decay for form weighting
 FH_SHARE_FALLBACK = 0.45  # only if a league has no half-time data
@@ -527,27 +533,45 @@ def get_backtest(div: str, edge: float = 0.05):
         return {"status": "running", "div": div}
     return bt
 
-# ---- Romanian live odds: arbitrage + value ----
-import odds_ro
+# ---- Live radar: pre-computed targets for in-play over/BTTS betting ----
+def live_radar():
+    """Rank today's fixtures by how likely goals are to flow (good for live 'over')."""
+    with LOCK:
+        fx = list(CACHE["fixtures"])
+    out = []
+    for f in fx:
+        goals = next((g for g in f["groups"] if g["name"] == "Goluri"), None)
+        if not goals:
+            continue
+        def pick_p(label):
+            for p in goals["picks"]:
+                if p["label"] == label:
+                    return p["p"]
+            return None
+        o15 = pick_p("Peste 1.5"); o25 = pick_p("Peste 2.5")
+        gg = pick_p("Ambele înscriu")
+        mu = f.get("mu")
+        if mu is None or o25 is None:
+            continue
+        # live-over target score: high expected goals + high BTTS + high over2.5
+        score = 0.45 * min(mu / 3.5, 1.0) + 0.30 * (o25 or 0) + 0.25 * (gg or 0)
+        # "wait until" minute at 0-0: rough guide from expected goals (more goals -> wait less)
+        wait_min = int(max(20, min(55, 75 - mu * 14)))
+        out.append({
+            "id": f["id"], "home": f["home"], "away": f["away"],
+            "date": f["date"], "league": f["league"],
+            "lh": f["lh"], "la": f["la"], "mu": mu,
+            "o15": o15, "o25": o25, "gg": gg,
+            "score": round(score, 4), "wait_min": wait_min,
+        })
+    out.sort(key=lambda x: -x["score"])
+    return out
 
-@app.get("/api/odds/arbs")
-def get_arbs():
-    with odds_ro.ODDS_LOCK:
-        return {"updated_at": odds_ro.ODDS_CACHE["updated_at"], "error": odds_ro.ODDS_CACHE["error"],
-                "arbs": odds_ro.ODDS_CACHE["arbs"]}
-
-@app.get("/api/odds/values")
-def get_values():
-    with odds_ro.ODDS_LOCK:
-        return {"updated_at": odds_ro.ODDS_CACHE["updated_at"], "error": odds_ro.ODDS_CACHE["error"],
-                "values": odds_ro.ODDS_CACHE["values"]}
-
-@app.get("/api/odds/debug")
-def get_odds_debug():
-    with odds_ro.ODDS_LOCK:
-        return {"updated_at": odds_ro.ODDS_CACHE["updated_at"], "error": odds_ro.ODDS_CACHE["error"],
-                "books_configured": odds_ro.RO_BOOKS, "key_set": bool(odds_ro.ODDS_KEY),
-                "events": len(odds_ro.ODDS_CACHE["events"]), "raw_sample": odds_ro.ODDS_CACHE["raw_sample"]}
+@app.get("/api/live-radar")
+def get_live_radar():
+    with LOCK:
+        updated = CACHE["updated_at"]
+    return {"updated_at": updated, "targets": live_radar()}
 
 # serve frontend (index.html placed next to this file)
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -564,7 +588,6 @@ def startup():
     threading.Thread(target=refresh, daemon=True).start()   # first load in background
     threading.Thread(target=keep_alive, daemon=True).start()  # prevent free-tier sleep
     scheduler.add_job(refresh, "interval", hours=REFRESH_HOURS, id="refresh")
-    odds_ro.start_odds_scheduler(scheduler)  # live RO odds: arbitrage + value
     scheduler.start()
 
 @app.on_event("shutdown")
