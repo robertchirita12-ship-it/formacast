@@ -4,6 +4,13 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>FormaCast</title>
+<link rel="manifest" href="/manifest.json" />
+<meta name="theme-color" content="#0E1520" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="FormaCast" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -333,14 +340,14 @@ function LiveRadar({panel}){
           <div style={{fontSize:14.5,fontWeight:600}}>{t.home} – {t.away}</div>
           <div className="mono" style={{fontSize:16,color:col}}>{Math.round(t.score*100)}</div>
         </div>
-        <div style={{fontSize:11,color:"var(--faint)",marginBottom:10}}>{dd?dd[2]+"."+dd[1]:""} · xG {t.lh}–{t.la} · total așteptat {t.mu?.toFixed?t.mu.toFixed(2):t.mu}</div>
+        <div style={{fontSize:11,color:"var(--faint)",marginBottom:10}}>{dd?dd[2]+"."+dd[1]:""}{fmtKick(t.kickoff)?" · "+fmtKick(t.kickoff):""} · xG {t.lh}–{t.la} · total așteptat {t.mu?.toFixed?t.mu.toFixed(2):t.mu}</div>
         <div style={{display:"flex",gap:14,flexWrap:"wrap",fontSize:12.5}}>
           <span style={{color:"var(--mute)"}}>Peste 1.5: <b style={{color:"var(--text)"}}>{Math.round((t.o15||0)*100)}%</b></span>
           <span style={{color:"var(--mute)"}}>Peste 2.5: <b style={{color:"var(--text)"}}>{Math.round((t.o25||0)*100)}%</b></span>
           <span style={{color:"var(--mute)"}}>GG: <b style={{color:"var(--text)"}}>{Math.round((t.gg||0)*100)}%</b></span>
         </div>
         <div style={{marginTop:9,padding:"7px 10px",background:"var(--chip)",borderRadius:8,fontSize:12.5,color:"var(--accent)"}}>
-          La 0-0, așteaptă până în min ~{t.wait_min}, apoi caută cotă crescută pe peste 1.5/2.5 live
+          La 0-0, așteaptă până în min ~{t.wait_min}{(()=>{const k=t.kickoff&&new Date(t.kickoff);if(!k||isNaN(k))return"";const w=new Date(k.getTime()+t.wait_min*60000);return " (~"+w.toLocaleTimeString("ro-RO",{hour:"2-digit",minute:"2-digit"})+")";})()}, apoi caută cotă crescută pe peste 1.5/2.5 live
         </div>
       </div>;
     })}
@@ -352,6 +359,7 @@ function LiveRadar({panel}){
 
 function App(){const[a,setA]=useState(false);return a?<Board/>:<Login onOk={()=>setA(true)}/>;}
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("/sw.js").catch(()=>{});});}
 </script>
 </body>
 </html>
