@@ -51,6 +51,11 @@ LEAGUES = {
     "G1":  ("Grecia · Super League",     ["2425", "2526"]),
     "SC0": ("Scoția · Premiership",      ["2425", "2526"]),
     "SC1": ("Scoția · Championship",     ["2425", "2526"]),
+    "E2":  ("Anglia · League One",       ["2425", "2526"]),
+    "E3":  ("Anglia · League Two",       ["2425", "2526"]),
+    "EC":  ("Anglia · National League",  ["2425", "2526"]),
+    "SC2": ("Scoția · League One",       ["2425", "2526"]),
+    "SC3": ("Scoția · League Two",       ["2425", "2526"]),
 }
 HALF_LIFE_DAYS = 180      # time-decay for form weighting
 FH_SHARE_FALLBACK = 0.45  # only if a league has no half-time data
@@ -81,6 +86,32 @@ def fetch_text(url: str, tries: int = 5) -> Optional[str]:
         except requests.RequestException:
             time.sleep(delay); delay *= 2
     return None
+
+
+def fetch_text_cached(url: str) -> Optional[str]:
+    """Like fetch_text, but backed by a DB cache. On a successful download we
+    refresh the cache; on failure (e.g. football-data.co.uk returns 429) we
+    fall back to the last good copy so a league never silently disappears."""
+    text = fetch_text(url)
+    try:
+        conn = journal._connect(); cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS csv_cache (url TEXT PRIMARY KEY, body TEXT, fetched_at TEXT)")
+        if text and len(text) > 40:  # got a real file -> update cache
+            cur.execute(journal._q(
+                "INSERT INTO csv_cache (url,body,fetched_at) VALUES (?,?,?) "
+                "ON CONFLICT (url) DO UPDATE SET body=?, fetched_at=?"),
+                (url, text, datetime.utcnow().isoformat(), text, datetime.utcnow().isoformat()))
+            conn.commit(); conn.close()
+            return text
+        # fetch failed -> use cache
+        cur.execute(journal._q("SELECT body FROM csv_cache WHERE url=?"), (url,))
+        row = cur.fetchone(); conn.close()
+        if row and row[0]:
+            print(f"csv_cache: using cached copy for {url}")
+            return row[0]
+    except Exception as e:
+        print("csv_cache error:", e)
+    return text
 
 # ----------------------------------------------------------------------------
 # PARSE
@@ -350,7 +381,7 @@ def build_markets(ft_model, fh_model, cstats, f):
 # ----------------------------------------------------------------------------
 def refresh():
     try:
-        fx_text = fetch_text(f"{BASE}/fixtures.csv")
+        fx_text = fetch_text_cached(f"{BASE}/fixtures.csv")
         fixtures_all = parse_csv(fx_text) if fx_text else []
         out_leagues, out_fixtures = [], []
         today = date.today()
@@ -358,7 +389,7 @@ def refresh():
         for div, (name, seasons) in LEAGUES.items():
             hist = []
             for s in seasons:
-                t = fetch_text(f"{BASE}/mmz4281/{s}/{div}.csv")
+                t = fetch_text_cached(f"{BASE}/mmz4281/{s}/{div}.csv")
                 if t:
                     hist += [g for g in parse_csv(t) if g["played"]]
                 time.sleep(1)  # be polite to the source
