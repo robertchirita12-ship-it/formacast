@@ -1,36 +1,70 @@
 """
-FormaCast — kickoff times from API-Football (v3).
+FormaCast — kickoff times from API-Football (v3), with robust name matching
+and persistent caching (Postgres via journal._connect).
 
-GET https://v3.football.api-sports.io/fixtures?date=YYYY-MM-DD&timezone=Europe/Bucharest
-Header: x-apisports-key: <API_FOOTBALL_KEY>
-Kickoff is fixture.date (ISO 8601 with tz). Free plan: 100 req/day -> we fetch a
-few days once and cache; matched to our fixtures by fuzzy team-name.
+GET https://v3.football.api-sports.io/fixtures?date=YYYY-MM-DD&timezone=<tz>
+Header: x-apisports-key: <API_FOOTBALL_KEY>. Free plan: 100 req/day.
 
-Key from env API_FOOTBALL_KEY (never hardcoded). Set in Render -> Environment.
+Why the rewrite:
+  - football-data abbreviates ("Man City", "Ath Madrid", "Sp Gijon") while
+    API-Football uses full names -> exact match failed. Now: alias map + fuzzy
+    (difflib) matching within the same date.
+  - We persist kickoffs in the DB and only re-fetch when stale, so restarts /
+    redeploys don't burn the daily quota (which caused count:0).
 """
-import os, time, threading, re, unicodedata
-from datetime import datetime, timedelta, timezone
-from typing import Dict
+import os, time, threading, re, unicodedata, difflib
+from datetime import datetime, timedelta, timezone, date as _date
+from typing import Dict, List
 
 import requests
+import journal  # reuse persistent DB connection
 
 AF_KEY = os.environ.get("API_FOOTBALL_KEY", "")
 AF_BASE = "https://v3.football.api-sports.io"
 TZ = os.environ.get("KICKOFF_TZ", "Europe/Bucharest")
-DAYS_AHEAD = int(os.environ.get("KICKOFF_DAYS_AHEAD", "4"))
+DAYS_AHEAD = int(os.environ.get("KICKOFF_DAYS_AHEAD", "7"))
+THROTTLE_HOURS = float(os.environ.get("KICKOFF_THROTTLE_H", "5"))  # min gap between API fetches
 
-# fixtureKey "home|away|date" -> ISO kickoff string ; plus a name-only fallback index
-KICKOFFS: Dict[str, str] = {}
+# date(YYYY-MM-DD) -> list of {"h":norm,"a":norm,"iso":iso}
+BYDATE: Dict[str, List[dict]] = {}
 KICK_LOCK = threading.Lock()
-KICK_STATE = {"updated_at": None, "error": None, "count": 0}
+KICK_STATE = {"updated_at": None, "error": None, "count": 0, "source": None}
+
+# UEFA club competitions (API-Football league ids). Fixtures-only: no historical
+# results source (football-data.co.uk doesn't cover them), so no xG prediction —
+# just an honest schedule, captured for free from the same by-date fetch below.
+EURO_LEAGUES = {2: "Champions League", 3: "Europa League", 848: "Conference League"}
+EURO_FIXTURES: List[dict] = []  # [{comp, home, away, iso, status}]
+EURO_LOCK = threading.Lock()
+
+# common football-data -> canonical tokens (helps exact + fuzzy)
+ALIASES = {
+    "man city": "manchester city", "man utd": "manchester united",
+    "man united": "manchester united", "nott'm forest": "nottingham forest",
+    "sheffield weds": "sheffield wednesday", "sheffield united": "sheffield united",
+    "west brom": "west bromwich", "wolves": "wolverhampton",
+    "ath madrid": "atletico madrid", "ath bilbao": "athletic bilbao",
+    "atletico": "atletico madrid", "sp gijon": "sporting gijon",
+    "espanol": "espanyol", "betis": "real betis", "sociedad": "real sociedad",
+    "vallecano": "rayo vallecano", "celta": "celta vigo", "cadiz": "cadiz",
+    "la coruna": "deportivo", "alaves": "alaves",
+    "inter": "inter", "milan": "ac milan", "juventus": "juventus",
+    "roma": "as roma", "napoli": "napoli", "verona": "hellas verona",
+    "paris sg": "paris saint germain", "psg": "paris saint germain",
+    "st etienne": "saint etienne", "m'gladbach": "borussia monchengladbach",
+    "leverkusen": "bayer leverkusen", "dortmund": "borussia dortmund",
+    "ein frankfurt": "eintracht frankfurt", "fc koln": "fc koln",
+    "bayern munich": "bayern munich", "schalke": "schalke",
+    "ajax": "ajax", "psv eindhoven": "psv", "az alkmaar": "az",
+    "sporting": "sporting cp", "porto": "fc porto", "benfica": "benfica",
+}
 
 
 def _norm(name: str) -> str:
-    """Normalise a team name for fuzzy matching across data sources."""
     if not name:
         return ""
-    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
-    s = s.lower()
+    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower().strip()
+    s = ALIASES.get(s, s)
     for junk in [" fc", " cf", " afc", " sc", " ac", " if", " bk", " sv", " calcio",
                  "1.", "fc ", "cf ", "sv ", "ss ", "us ", "as ", "rc ", "cd ", "sd "]:
         s = s.replace(junk, " ")
@@ -38,14 +72,83 @@ def _norm(name: str) -> str:
     return s
 
 
-def refresh_kickoffs():
-    if not AF_KEY:
+# ---- persistence ----------------------------------------------------------
+def _ensure_tables():
+    conn = journal._connect(); cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS kickoffs (date TEXT, h TEXT, a TEXT, iso TEXT)")
+    cur.execute("CREATE TABLE IF NOT EXISTS kickoffs_meta (k TEXT PRIMARY KEY, v TEXT)")
+    cur.execute("CREATE TABLE IF NOT EXISTS euro_fixtures (comp TEXT, home TEXT, away TEXT, iso TEXT, status TEXT)")
+    conn.commit(); conn.close()
+
+
+def _load_from_db():
+    try:
+        _ensure_tables()
+        conn = journal._connect(); cur = conn.cursor()
+        cur.execute("SELECT date,h,a,iso FROM kickoffs")
+        m = {}
+        for d, h, a, iso in cur.fetchall():
+            m.setdefault(d, []).append({"h": h, "a": a, "iso": iso})
+        cur.execute("SELECT comp,home,away,iso,status FROM euro_fixtures ORDER BY iso ASC")
+        euro = [{"comp": c, "home": h, "away": a, "iso": iso, "status": s}
+                for c, h, a, iso, s in cur.fetchall()]
+        cur.execute("SELECT v FROM kickoffs_meta WHERE k='last_fetch'")
+        row = cur.fetchone()
+        conn.close()
         with KICK_LOCK:
-            KICK_STATE.update({"error": "API_FOOTBALL_KEY nu e setat (Render -> Environment)."})
+            BYDATE.clear(); BYDATE.update(m)
+            KICK_STATE["count"] = sum(len(v) for v in m.values())
+            KICK_STATE["updated_at"] = row[0] if row else None
+            KICK_STATE["source"] = "db"
+        with EURO_LOCK:
+            EURO_FIXTURES.clear(); EURO_FIXTURES.extend(euro)
+        return row[0] if row else None
+    except Exception as e:
+        KICK_STATE["error"] = f"load_db: {e}"; print("kickoffs load_db error:", e)
+        return None
+
+
+def _save_to_db(bydate, euro, when_iso):
+    try:
+        _ensure_tables()
+        conn = journal._connect(); cur = conn.cursor()
+        cur.execute("DELETE FROM kickoffs")
+        ins = journal._q("INSERT INTO kickoffs (date,h,a,iso) VALUES (?,?,?,?)")
+        for d, games in bydate.items():
+            for g in games:
+                cur.execute(ins, (d, g["h"], g["a"], g["iso"]))
+        cur.execute("DELETE FROM euro_fixtures")
+        ins2 = journal._q("INSERT INTO euro_fixtures (comp,home,away,iso,status) VALUES (?,?,?,?,?)")
+        for e in euro:
+            cur.execute(ins2, (e["comp"], e["home"], e["away"], e["iso"], e.get("status")))
+        cur.execute(journal._q(
+            "INSERT INTO kickoffs_meta (k,v) VALUES ('last_fetch',?) ON CONFLICT (k) DO UPDATE SET v=?"),
+            (when_iso, when_iso))
+        conn.commit(); conn.close()
+    except Exception as e:
+        KICK_STATE["error"] = f"save_db: {e}"; print("kickoffs save_db error:", e)
+
+
+def _stale(last_iso) -> bool:
+    if not last_iso:
+        return True
+    try:
+        last = datetime.fromisoformat(last_iso.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - last).total_seconds() > THROTTLE_HOURS * 3600
+    except Exception:
+        return True
+
+
+# ---- fetch ----------------------------------------------------------------
+def refresh_kickoffs(force: bool = False):
+    if not AF_KEY:
+        KICK_STATE["error"] = "API_FOOTBALL_KEY nu e setat (Render -> Environment)."
         return
+    last = _load_from_db()
+    if not force and not _stale(last):
+        return  # cache still fresh -> save quota
     headers = {"x-apisports-key": AF_KEY}
-    new_map = {}
-    err = None
+    bydate = {}; euro = []; err = None
     try:
         today = datetime.now(timezone.utc)
         for i in range(DAYS_AHEAD):
@@ -53,43 +156,83 @@ def refresh_kickoffs():
             r = requests.get(f"{AF_BASE}/fixtures", headers=headers,
                              params={"date": d, "timezone": TZ}, timeout=30)
             if r.status_code != 200:
-                err = f"API-Football {r.status_code}: {r.text[:150]}"
-                break
+                err = f"API-Football {r.status_code}: {r.text[:120]}"; break
             js = r.json()
+            api_errors = js.get("errors")
+            if api_errors:  # e.g. quota reached returns 200 + errors
+                err = f"API errors: {str(api_errors)[:120]}"; break
             for item in js.get("response", []):
-                fx = item.get("fixture", {})
-                iso = fx.get("date")
-                teams = item.get("teams", {})
+                fixture = item.get("fixture") or {}
+                iso = fixture.get("date")
+                teams = item.get("teams") or {}
                 home = (teams.get("home") or {}).get("name")
                 away = (teams.get("away") or {}).get("name")
                 if not (iso and home and away):
                     continue
-                daypart = iso[:10]
-                # store by normalised home|away|date AND by home|away (loose)
-                new_map[f"{_norm(home)}|{_norm(away)}|{daypart}"] = iso
-                new_map.setdefault(f"{_norm(home)}|{_norm(away)}", iso)
-            time.sleep(1)  # be gentle with the free 100/day quota
+                bydate.setdefault(iso[:10], []).append(
+                    {"h": _norm(home), "a": _norm(away), "iso": iso})
+                league_id = (item.get("league") or {}).get("id")
+                if league_id in EURO_LEAGUES:
+                    euro.append({"comp": EURO_LEAGUES[league_id], "home": home, "away": away,
+                                "iso": iso, "status": (fixture.get("status") or {}).get("short")})
+            time.sleep(1)
     except requests.RequestException as e:
         err = f"conexiune: {e}"
-    if new_map:
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if bydate or euro:
+        euro.sort(key=lambda e: e["iso"])
+        _save_to_db(bydate, euro, now_iso)
         with KICK_LOCK:
-            KICKOFFS.clear(); KICKOFFS.update(new_map)
-            KICK_STATE.update({"updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                               "error": err, "count": len(new_map)})
+            BYDATE.clear(); BYDATE.update(bydate)
+            KICK_STATE.update({"updated_at": now_iso, "error": err,
+                               "count": sum(len(v) for v in bydate.values()), "source": "api"})
+        with EURO_LOCK:
+            EURO_FIXTURES.clear(); EURO_FIXTURES.extend(euro)
     else:
-        with KICK_LOCK:
-            KICK_STATE["error"] = err or "niciun rezultat"
+        # keep whatever we had in DB; just record the error
+        KICK_STATE["error"] = err or "niciun rezultat"
 
 
+# ---- matching -------------------------------------------------------------
 def kickoff_for(home: str, away: str, date_iso: str):
-    """Return ISO kickoff for a fixture, matching by normalised names (+date if possible)."""
     h, a = _norm(home), _norm(away)
+    day = (date_iso or "")[:10]
     with KICK_LOCK:
-        return (KICKOFFS.get(f"{h}|{a}|{date_iso[:10]}")
-                or KICKOFFS.get(f"{h}|{a}")
-                or None)
+        games = list(BYDATE.get(day, []))
+        # also consider +/- 1 day for tz/rollover edge cases
+        for off in (1, -1):
+            try:
+                d2 = (_date.fromisoformat(day) + timedelta(days=off)).isoformat()
+                games += BYDATE.get(d2, [])
+            except Exception:
+                pass
+    if not games:
+        return None
+    # 1) exact
+    for g in games:
+        if g["h"] == h and g["a"] == a:
+            return g["iso"]
+    # 2) fuzzy: both sides must be reasonably close; pick best combined
+    best, best_score = None, 0.0
+    for g in games:
+        sh = difflib.SequenceMatcher(None, h, g["h"]).ratio()
+        sa = difflib.SequenceMatcher(None, a, g["a"]).ratio()
+        if sh >= 0.55 and sa >= 0.55:
+            score = sh + sa
+            if score > best_score:
+                best, best_score = g, score
+    return best["iso"] if best else None
+
+
+def get_euro_fixtures():
+    with EURO_LOCK:
+        return list(EURO_FIXTURES)
 
 
 def start_kickoff_scheduler(scheduler):
-    threading.Thread(target=refresh_kickoffs, daemon=True).start()
+    def boot():
+        _load_from_db()            # instant: use cached times
+        refresh_kickoffs()          # fetch only if stale
+    threading.Thread(target=boot, daemon=True).start()
     scheduler.add_job(refresh_kickoffs, "interval", hours=6, id="kickoffs")

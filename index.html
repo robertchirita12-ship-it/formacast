@@ -43,6 +43,11 @@ const fx2=n=>Number(n).toFixed(2);
 const conf=p=>p>=0.65?"var(--strong)":p>=0.52?"var(--mid)":"var(--weak)";
 const fmtDate=iso=>{const[,m,d]=iso.split("-");return d+"."+m;};
 const fmtKick=iso=>{if(!iso)return null;try{const t=new Date(iso);return t.toLocaleTimeString("ro-RO",{hour:"2-digit",minute:"2-digit"});}catch{return null;}};
+// Etichete scurte, fără ambiguitate: "1"/"2" arată explicit liga întâi vs a doua.
+const DIV_SHORT={E0:"Anglia 1",E1:"Anglia 2",SP1:"Spania 1",SP2:"Spania 2",I1:"Italia 1",I2:"Italia 2",
+  D1:"Germania 1",D2:"Germania 2",F1:"Franța 1",F2:"Franța 2",SC0:"Scoția 1",SC1:"Scoția 2",
+  N1:"Olanda",P1:"Portugalia",T1:"Turcia",B1:"Belgia",G1:"Grecia"};
+const divShort=(div,league)=>DIV_SHORT[div]||(league?league.split(" · ")[0]:"");
 
 function Bar({p,color}){return <div style={{height:5,background:"var(--chip)",borderRadius:3,overflow:"hidden",flex:1}}>
   <div style={{width:Math.max(0,Math.min(100,p*100))+"%",height:"100%",background:color,borderRadius:3}}/></div>;}
@@ -72,6 +77,8 @@ function Board(){
   const[tab,setTab]=useState("matches");
 
   useEffect(()=>{fetch(API+"/api/fixtures").then(r=>r.json()).then(setData).catch(()=>setErr("Nu pot contacta serverul."));},[]);
+  const[euro,setEuro]=useState([]);
+  useEffect(()=>{fetch(API+"/api/euro-fixtures").then(r=>r.json()).then(d=>setEuro(d.fixtures||[])).catch(()=>{});},[]);
   const fixtures=data?data.fixtures:[];
   const leagues=useMemo(()=>{const s=[];for(const f of fixtures)if(!s.find(x=>x.div===f.div))s.push({div:f.div,league:f.league});return s;},[fixtures]);
   const list=divF==="ALL"?fixtures:fixtures.filter(f=>f.div===divF);
@@ -118,12 +125,13 @@ function Board(){
     </header>
     <div style={wrap}>
       <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
-        {[["matches","Meciuri"],["daily","Ponturi"],["live","Live radar"],["journal","Jurnal"],["backtest","Backtest"]].map(([id,l])=>
+        {[["matches","Meciuri"],["daily","Ponturi"],["live","Live radar"],["ledger","Registru"],["journal","Jurnal"],["backtest","Backtest"]].map(([id,l])=>
           <button key={id} onClick={()=>setTab(id)} style={{padding:"8px 14px",borderRadius:9,border:"none",background:tab===id?"var(--accent)":"var(--panel)",color:tab===id?"var(--bg)":"var(--mute)",fontSize:13,fontWeight:600}}>{l}</button>)}
       </div>
 
       {tab==="backtest"&&<Backtest leagues={leagues} panel={panel}/>}
       {tab==="live"&&<LiveRadar panel={panel}/>}
+      {tab==="ledger"&&<Ledger panel={panel} fixtures={data?data.fixtures:[]}/>}
       {tab==="journal"&&<Journal panel={panel}/>}
 
       {tab==="daily"&&<React.Fragment>
@@ -158,7 +166,7 @@ function Board(){
                 <div style={{width:15,height:15,borderRadius:4,border:"1.5px solid "+(sel?"var(--accent)":"var(--line)"),background:sel?"var(--accent)":"transparent",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--bg)",fontWeight:700}}>{sel?"✓":""}</div>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:13.5,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.label}</div>
-                  <div style={{fontSize:11,color:"var(--faint)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.f.home} – {c.f.away} · {c.f.league.split(" · ")[0]} · {c.group}</div>
+                  <div style={{fontSize:11,color:"var(--faint)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.f.home} – {c.f.away} · {divShort(c.f.div,c.f.league)} · {c.group}</div>
                 </div>
                 <div className="mono" style={{width:40,textAlign:"right",fontSize:15,color:col}}>{pct(c.p)}</div>
                 <div className="mono" style={{width:44,textAlign:"right",fontSize:13,color:c.real?"var(--text)":"var(--mute)"}}>{fx2(c.odd)}</div>
@@ -174,12 +182,30 @@ function Board(){
       {err&&<div style={{...panel,padding:24,color:"var(--weak)"}}>{err}</div>}
       {data&&fixtures.length===0&&<div style={{...panel,padding:30,textAlign:"center",color:"var(--mute)"}}>Serverul încă antrenează modelele sau nu sunt meciuri viitoare. Reîncearcă în câteva minute.</div>}
 
-      {fixtures.length>0&&<div className="scroll" style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:12}}>
+      {(fixtures.length>0||euro.length>0)&&<div className="scroll" style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:12}}>
         <button onClick={()=>setDivF("ALL")} style={chip(divF==="ALL")}>Toate</button>
-        {leagues.map(l=><button key={l.div} onClick={()=>setDivF(l.div)} style={chip(divF===l.div)}>{l.league.split(" · ")[0]}</button>)}
+        {euro.length>0&&<button onClick={()=>setDivF("EURO")} style={chip(divF==="EURO")}>Cupe UEFA</button>}
+        {leagues.map(l=><button key={l.div} onClick={()=>setDivF(l.div)} style={chip(divF===l.div)}>{divShort(l.div,l.league)}</button>)}
       </div>}
 
-      {list.map(f=>{
+      {divF==="EURO"&&<React.Fragment>
+        <div style={{...panel,padding:"12px 14px",marginBottom:10,fontSize:11.5,color:"var(--faint)",lineHeight:1.6}}>
+          Champions / Europa / Conference League: doar programul (fără xG). Sursa noastră de istoric nu acoperă cupele europene, așa că modelul nu poate calcula o predicție reală aici — mai bine fără predicție decât una inventată.
+        </div>
+        {euro.length===0&&<div style={{...panel,padding:24,textAlign:"center",color:"var(--mute)"}}>Niciun meci găsit în fereastra curentă.</div>}
+        {euro.map((e,i)=>{
+          const t=fmtKick(e.iso);const dt=e.iso?e.iso.slice(0,10).split("-"):null;
+          return <div key={i} style={{...panel,marginBottom:8,padding:"11px 14px",display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+            <div>
+              <div style={{fontSize:14,fontWeight:600}}>{e.home} <span style={{color:"var(--faint)",fontWeight:400}}>–</span> {e.away}</div>
+              <div className="mono" style={{fontSize:10.5,color:"var(--faint)",marginTop:2}}>{e.comp} · {dt?dt[2]+"."+dt[1]:""}</div>
+            </div>
+            <div className="mono" style={{fontSize:13,color:"var(--accent)",fontWeight:700}}>{t||"–"}</div>
+          </div>;
+        })}
+      </React.Fragment>}
+
+      {divF!=="EURO"&&list.map(f=>{
         const id=f.id, isOpen=open===id;
         const res=f.groups[0].picks; const one=[...res.slice(0,3)].sort((a,b)=>b.p-a.p)[0];
         const c=conf(one.p);
@@ -187,7 +213,7 @@ function Board(){
           <div className="row" onClick={()=>setOpen(isOpen?null:id)} style={{padding:"12px 14px",cursor:"pointer"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
               <div style={{fontSize:15,fontWeight:600}}>{f.home} <span style={{color:"var(--faint)",fontWeight:400}}>–</span> {f.away}</div>
-              <div className="mono" style={{fontSize:10.5,color:"var(--faint)"}}>{f.league.split(" · ")[0]} · {fmtDate(f.date)}{fmtKick(f.kickoff)?" · "+fmtKick(f.kickoff):""}</div>
+              <div className="mono" style={{fontSize:10.5,color:"var(--faint)"}}>{divShort(f.div,f.league)} · {fmtDate(f.date)}{fmtKick(f.kickoff)?" · "+fmtKick(f.kickoff):""}</div>
             </div>
             <div style={{display:"flex",alignItems:"center",gap:12,marginTop:8}}>
               <span className="mono" style={{fontSize:12.5,color:"var(--mute)"}}>xG {f.lh}–{f.la}</span>
@@ -246,9 +272,9 @@ function Board(){
           <span style={{fontSize:12.5,color:"var(--mute)"}}>miză</span>
           <input type="number" value={stake} min="0" onChange={e=>setStake(parseFloat(e.target.value)||0)} className="mono" style={{width:80,background:"var(--chip)",color:"var(--text)",border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px",fontSize:14}}/>
           <button onClick={copySlip} style={{marginLeft:"auto",fontSize:12.5,background:"var(--panel)",border:"1px solid var(--line)",borderRadius:8,padding:"8px 12px",color:copied?"var(--strong)":"var(--text)",fontWeight:600}}>{copied?"✓ copiat":"copiază biletul"}</button>
-          <button onClick={async()=>{await copySlip();window.open("https://www.superbet.ro","_blank");}} style={{fontSize:12.5,background:"var(--accent)",border:"none",borderRadius:8,padding:"8px 12px",color:"var(--bg)",fontWeight:700}}>Superbet →</button>
+          <button onClick={async()=>{await copySlip();window.open("https://www.betano.ro","_blank");}} style={{fontSize:12.5,background:"var(--accent)",border:"none",borderRadius:8,padding:"8px 12px",color:"var(--bg)",fontWeight:700}}>Betano →</button>
         </div>
-        <div style={{fontSize:10.5,color:"var(--faint)",marginTop:8,lineHeight:1.5}}>„Superbet →" copiază biletul și deschide site-ul. Selecțiile le adaugi tu manual acolo — casele nu permit completarea biletului din exterior.</div>
+        <div style={{fontSize:10.5,color:"var(--faint)",marginTop:8,lineHeight:1.5}}>„Betano →" copiază biletul și deschide site-ul. Selecțiile le adaugi tu manual acolo — casele nu permit completarea biletului din exterior.</div>
       </div>}
       <div onClick={()=>setSlipOpen(o=>!o)} style={{maxWidth:900,margin:"0 auto",background:"var(--accent)",color:"var(--bg)",padding:"13px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}>
         <b style={{fontSize:13}}>Bilet · {slip.length}</b>
@@ -315,6 +341,199 @@ function Backtest({leagues,panel}){
       <div style={{fontSize:11.5,color:"var(--faint)",marginTop:12,lineHeight:1.6}}>Reper: acuratețea „ghicind favoritul din cotă" e ~50–55%. ROI pozitiv susținut e greu — dacă iese negativ, e semnalul corect că piața e eficientă acolo, nu un bug.</div>
     </React.Fragment>}
   </div>;
+}
+
+function Ledger({panel,fixtures}){
+  const[sum,setSum]=useState(null);const[list,setList]=useState(null);const[err,setErr]=useState(null);
+  const[tab,setTab]=useState("dash");const[busy,setBusy]=useState(false);
+  // add-bet form state
+  const[mId,setMId]=useState("");const[gName,setGName]=useState("");const[selLabel,setSelLabel]=useState("");
+  const[btype,setBtype]=useState("prematch");const[odds,setOdds]=useState("");const[stake,setStake]=useState("");
+  const[cfgBank,setCfgBank]=useState("");const[savedCfg,setSavedCfg]=useState(false);
+  const load=()=>{
+    fetch(API+"/api/ledger/summary").then(r=>r.json()).then(setSum).catch(()=>setErr("eroare rețea"));
+    fetch(API+"/api/bets?limit=200").then(r=>r.json()).then(d=>setList(d.bets||[])).catch(()=>{});
+  };
+  useEffect(load,[]);
+  useEffect(()=>{if(sum&&!stake&&sum.suggested_stake)setStake(String(sum.suggested_stake));},[sum]);
+
+  const fx=fixtures||[];
+  const match=fx.find(f=>f.id===mId);
+  const groups=match?match.groups:[];
+  const grp=groups.find(g=>g.name===gName);
+  const picks=grp?grp.picks:[];
+  const pick=picks.find(p=>p.label===selLabel);
+  useEffect(()=>{if(pick&&pick.odd)setOdds(String(pick.odd));},[selLabel]);
+
+  const pct=x=>x==null?"–":Math.round(x*100)+"%";
+  const clvColor=x=>x==null?"var(--faint)":x>0?"var(--strong)":x<0?"var(--weak)":"var(--mute)";
+  const money=x=>x==null?"–":(x>0?"+":"")+Number(x).toFixed(2);
+
+  const submit=async()=>{
+    if(!match||!selLabel||!odds||!stake){return;}
+    setBusy(true);
+    const body={match_id:match.id,div:match.div,league:match.league,home:match.home,away:match.away,
+      match_date:match.date,kickoff:match.kickoff,market:gName,selection:selLabel,bet_type:btype,
+      odds:parseFloat(odds),stake:parseFloat(stake),model_prob:pick?pick.p:null};
+    try{const r=await fetch(API+"/api/bets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      if(r.ok){setMId("");setGName("");setSelLabel("");setOdds("");setStake("");load();setTab("bets");}
+    }catch{}
+    setBusy(false);
+  };
+  const settle=async(id,status)=>{await fetch(API+`/api/bets/${id}/settle`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({status})});load();};
+  const del=async(id)=>{await fetch(API+`/api/bets/${id}/delete`,{method:"POST"});load();};
+  const saveBank=async()=>{const v=parseFloat(cfgBank);if(!(v>0))return;
+    await fetch(API+"/api/ledger/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({start_bank:v})});
+    setCfgBank("");setSavedCfg(true);setTimeout(()=>setSavedCfg(false),1600);load();};
+
+  const inp={background:"var(--chip)",color:"var(--text)",border:"1px solid var(--line)",borderRadius:8,padding:"9px 10px",fontSize:14,width:"100%",boxSizing:"border-box"};
+  const lbl={fontSize:11,color:"var(--faint)",marginBottom:4,display:"block"};
+
+  if(err)return <div style={{...panel,padding:18,color:"var(--weak)"}}>{err}</div>;
+  if(!sum)return <div style={{...panel,padding:18,color:"var(--mute)"}}>Se încarcă registrul…</div>;
+
+  // mini bank curve (sparkline)
+  const curve=sum.curve||[];const cmin=Math.min(sum.start_bank,...curve),cmax=Math.max(sum.start_bank,...curve);
+  const spark=(()=>{if(curve.length<2)return null;const w=280,h=48,pad=3;const pts=[sum.start_bank,...curve];
+    const rng=(cmax-cmin)||1;const step=(w-2*pad)/(pts.length-1);
+    const d=pts.map((v,i)=>`${pad+i*step},${h-pad-((v-cmin)/rng)*(h-2*pad)}`).join(" ");
+    const up=pts[pts.length-1]>=pts[0];
+    return <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{display:"block"}}><polyline points={d} fill="none" stroke={up?"var(--strong)":"var(--weak)"} strokeWidth="2"/></svg>;})();
+
+  return <React.Fragment>
+    <div style={{display:"flex",gap:8,marginBottom:12}}>
+      {[["dash","Tablou"],["add","+ Pariu"],["bets","Pariuri"]].map(([id,l])=>
+        <button key={id} onClick={()=>setTab(id)} style={{padding:"7px 12px",borderRadius:8,border:"none",fontSize:12.5,fontWeight:600,background:tab===id?"var(--accent)":"var(--panel)",color:tab===id?"var(--bg)":"var(--mute)"}}>{l}</button>)}
+    </div>
+
+    {tab==="dash"&&<React.Fragment>
+      <div style={{...panel,padding:"14px 16px",marginBottom:10}}>
+        <div style={{fontSize:11,color:"var(--faint)"}}>Bancă</div>
+        <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+          <div className="mono" style={{fontSize:30,fontWeight:700}}>{sum.bank.toFixed(2)}</div>
+          <div className="mono" style={{fontSize:13,color:sum.profit>=0?"var(--strong)":"var(--weak)"}}>{money(sum.profit)}</div>
+          <div style={{marginLeft:"auto",fontSize:11,color:"var(--faint)",textAlign:"right"}}>țintă {sum.target.toFixed(0)}<br/>start {sum.start_bank.toFixed(0)}</div>
+        </div>
+        {spark}
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--faint)",marginTop:4}}>
+          <span>{sum.pending_n} în joc ({sum.pending_stake.toFixed(2)} lei)</span>
+          <span>miză sugerată: <b style={{color:"var(--accent)"}}>{sum.suggested_stake.toFixed(2)} lei</b> ({Math.round(sum.unit_pct*100)}%)</span>
+        </div>
+      </div>
+
+      <div style={{...panel,padding:"10px 14px",marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
+        <span style={{fontSize:11,color:"var(--faint)"}}>Bancă de start</span>
+        <input type="number" step="1" value={cfgBank} onChange={e=>setCfgBank(e.target.value)} placeholder={sum.start_bank.toFixed(0)} className="mono" style={{width:80,background:"var(--chip)",color:"var(--text)",border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px",fontSize:14}}/>
+        <button onClick={saveBank} style={{fontSize:12,padding:"7px 11px",borderRadius:8,background:savedCfg?"var(--strong)":"var(--panel)",border:"1px solid var(--line)",color:savedCfg?"var(--bg)":"var(--mute)",fontWeight:600}}>{savedCfg?"✓ setat":"setează"}</button>
+        <span style={{marginLeft:"auto",fontSize:10,color:"var(--faint)",textAlign:"right"}}>pune soldul tău<br/>real de acum</span>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+        {[["Yield",sum.yield==null?"–":pct(sum.yield),"profit / miză"],
+          ["ROI bancă",sum.roi_bank==null?"–":pct(sum.roi_bank),"creșterea băncii"],
+          ["Succes",sum.strike==null?"–":pct(sum.strike),sum.settled_n+" închise"]].map(([t,v,s])=>
+          <div key={t} style={{...panel,padding:"10px 11px"}}>
+            <div style={{fontSize:10.5,color:"var(--faint)"}}>{t}</div>
+            <div className="mono" style={{fontSize:18,fontWeight:700}}>{v}</div>
+            <div style={{fontSize:9.5,color:"var(--faint)"}}>{s}</div>
+          </div>)}
+      </div>
+
+      <div style={{...panel,padding:"12px 14px",marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+          <div style={{fontSize:12.5,fontWeight:700}}>CLV mediu (prematch)</div>
+          <div className="mono" style={{fontSize:18,fontWeight:700,color:clvColor(sum.avg_clv)}}>{sum.avg_clv==null?"–":pct(sum.avg_clv)}</div>
+        </div>
+        <div style={{fontSize:10.5,color:"var(--faint)",lineHeight:1.5}}>Cât de des baţi cota de închidere. Peste 0 constant, pe multe pariuri = edge real. E semnalul care contează, nu banca de azi.</div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        {[["Prematch",sum.prematch],["Live",sum.live]].map(([t,d])=>
+          <div key={t} style={{...panel,padding:"11px 13px"}}>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:5}}>{t}</div>
+            <div style={{fontSize:11.5,color:"var(--mute)",lineHeight:1.7}}>
+              {d.n} pariuri<br/>
+              profit <b style={{color:d.profit>=0?"var(--strong)":"var(--weak)"}}>{money(d.profit)}</b><br/>
+              yield <b>{d.yield==null?"–":pct(d.yield)}</b> · succes <b>{d.strike==null?"–":pct(d.strike)}</b>
+            </div>
+          </div>)}
+      </div>
+      <div style={{fontSize:10,color:"var(--faint)",textAlign:"center",marginTop:12,lineHeight:1.5}}>Sub ~100 de pariuri cifrele sunt zgomot. Contează tendinţa pe volum mare, nu rezultatul unei zile.</div>
+    </React.Fragment>}
+
+    {tab==="add"&&<div style={{...panel,padding:"14px 15px"}}>
+      <div style={{fontSize:13.5,fontWeight:700,marginBottom:12}}>Adaugă un pariu pe care l-ai pus</div>
+      <div style={{marginBottom:10}}>
+        <label style={lbl}>Meci</label>
+        <select style={inp} value={mId} onChange={e=>{setMId(e.target.value);setGName("");setSelLabel("");}}>
+          <option value="">— alege meciul —</option>
+          {fx.map(f=><option key={f.id} value={f.id}>{f.home} – {f.away} ({divShort(f.div,f.league)})</option>)}
+        </select>
+      </div>
+      {match&&<div style={{marginBottom:10}}>
+        <label style={lbl}>Piață</label>
+        <select style={inp} value={gName} onChange={e=>{setGName(e.target.value);setSelLabel("");}}>
+          <option value="">— alege piața —</option>
+          {groups.map(g=><option key={g.name} value={g.name}>{g.name}</option>)}
+        </select>
+      </div>}
+      {grp&&<div style={{marginBottom:10}}>
+        <label style={lbl}>Selecție (șansă model · cotă model)</label>
+        <select style={inp} value={selLabel} onChange={e=>setSelLabel(e.target.value)}>
+          <option value="">— alege selecția —</option>
+          {picks.map(p=><option key={p.label} value={p.label}>{p.label} · {Math.round(p.p*100)}% · {fx2(p.odd)}</option>)}
+        </select>
+      </div>}
+      <div style={{display:"flex",gap:8,marginBottom:10}}>
+        <div style={{flex:1}}>
+          <label style={lbl}>Tip</label>
+          <div style={{display:"flex",gap:6}}>
+            {["prematch","live"].map(t=><button key={t} onClick={()=>setBtype(t)} style={{flex:1,padding:"9px 0",borderRadius:8,border:"none",fontSize:12.5,fontWeight:600,background:btype===t?"var(--accent)":"var(--chip)",color:btype===t?"var(--bg)":"var(--mute)"}}>{t}</button>)}
+          </div>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:14}}>
+        <div style={{flex:1}}><label style={lbl}>Cota luată</label>
+          <input style={inp} type="number" step="0.01" value={odds} onChange={e=>setOdds(e.target.value)} placeholder="ex. 1.85"/></div>
+        <div style={{flex:1}}><label style={lbl}>Miză (lei)</label>
+          <input style={inp} type="number" step="0.1" value={stake} onChange={e=>setStake(e.target.value)}/></div>
+      </div>
+      {btype==="prematch"&&pick&&odds&&<div style={{fontSize:11,color:clvColor(parseFloat(odds)*pick.p-1),marginBottom:10}}>
+        Valoare estimată acum: {((parseFloat(odds)*pick.p-1)*100).toFixed(1)}% (cotă × șansă model − 1)</div>}
+      <button onClick={submit} disabled={busy||!match||!selLabel||!odds||!stake} style={{width:"100%",padding:12,borderRadius:9,border:"none",background:"var(--accent)",color:"var(--bg)",fontSize:14.5,fontWeight:700,opacity:(busy||!match||!selLabel||!odds||!stake)?0.5:1}}>{busy?"…":"Adaugă în registru"}</button>
+      <div style={{fontSize:10.5,color:"var(--faint)",marginTop:10,lineHeight:1.5}}>Pune cota exact cât ai prins pe Betano. La prematch, CLV-ul se calculează singur când se joacă meciul.</div>
+    </div>}
+
+    {tab==="bets"&&<React.Fragment>
+      {(!list||list.length===0)?<div style={{...panel,padding:18,color:"var(--mute)"}}>Niciun pariu în registru încă. Adaugă unul din „+ Pariu".</div>
+      :list.map(b=>{
+        const done=b.status!=="pending";
+        const c=b.status==="won"?"var(--strong)":b.status==="lost"?"var(--weak)":b.status==="void"?"var(--mute)":"var(--faint)";
+        return <div key={b.id} style={{...panel,marginBottom:8,padding:"11px 13px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+            <div style={{fontSize:13.5,fontWeight:600}}>{b.home} – {b.away}</div>
+            <div style={{display:"flex",gap:6,alignItems:"baseline"}}>
+              <span style={{fontSize:9.5,padding:"1px 6px",borderRadius:5,background:"var(--chip)",color:"var(--faint)"}}>{b.bet_type}</span>
+              <span className="mono" style={{fontSize:12.5,color:c,fontWeight:700}}>{done?(b.status==="won"?"✓":b.status==="lost"?"✗":"—"):"…"}</span>
+            </div>
+          </div>
+          <div style={{fontSize:11.5,color:"var(--mute)",marginTop:3}}>{b.market}: <b style={{color:"var(--text)"}}>{b.selection}</b> · cotă {fx2(b.odds)} · miză {Number(b.stake).toFixed(2)}</div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}>
+            <div style={{fontSize:11}}>
+              {done?<span className="mono" style={{color:b.pl>=0?"var(--strong)":"var(--weak)"}}>{money(b.pl)} lei{b.clv_pct!=null?<span style={{color:clvColor(b.clv_pct)}}> · CLV {(b.clv_pct*100).toFixed(1)}%</span>:""}</span>
+                :<span style={{color:"var(--faint)"}}>în așteptare</span>}
+            </div>
+            {!done&&<div style={{display:"flex",gap:6}}>
+              <button onClick={()=>settle(b.id,"won")} style={{fontSize:11,padding:"5px 9px",borderRadius:7,border:"none",background:"var(--strong)",color:"var(--bg)",fontWeight:700}}>Câștigat</button>
+              <button onClick={()=>settle(b.id,"lost")} style={{fontSize:11,padding:"5px 9px",borderRadius:7,border:"none",background:"var(--weak)",color:"var(--bg)",fontWeight:700}}>Pierdut</button>
+              <button onClick={()=>del(b.id)} style={{fontSize:11,padding:"5px 8px",borderRadius:7,border:"1px solid var(--line)",background:"transparent",color:"var(--faint)"}}>șterge</button>
+            </div>}
+          </div>
+        </div>;
+      })}
+      <div style={{fontSize:10.5,color:"var(--faint)",textAlign:"center",marginTop:8,lineHeight:1.5}}>Cele mai multe se închid singure când se joacă meciul. Butoanele Câștigat/Pierdut sunt pentru piețe pe care modelul nu le poate verifica automat.</div>
+    </React.Fragment>}
+  </React.Fragment>;
 }
 
 function Journal({panel}){
@@ -391,7 +610,7 @@ function Journal({panel}){
               :<span style={{fontSize:11,color:"var(--faint)"}}>în așteptare</span>}
           </div>
           <div style={{fontSize:11.5,color:"var(--faint)",marginTop:3}}>
-            {(x.league||"").split(" · ")[0]} · prezis <b style={{color:"var(--mute)"}}>{x.fav}</b> ({pct(x.fav_p)})
+            {divShort(x.div,x.league)} · prezis <b style={{color:"var(--mute)"}}>{x.fav}</b> ({pct(x.fav_p)})
             {done&&<span> · a ieșit <b style={{color:"var(--mute)"}}>{x.result}</b></span>}
           </div>
         </div>;

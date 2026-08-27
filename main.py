@@ -19,10 +19,11 @@ from datetime import datetime, date
 from typing import Dict, List, Optional
 
 import requests
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 import kickoffs
 import journal
+import ledger
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -405,6 +406,7 @@ def refresh():
         try:
             journal.record(out_fixtures)
             journal.settle(HIST)
+            ledger.auto_settle(HIST)   # close my placed bets that have been played
         except Exception as je:  # never let the journal break a refresh
             print("journal hook error:", je)
     except Exception as e:  # noqa
@@ -522,13 +524,24 @@ def get_leagues():
     with LOCK:
         return CACHE["leagues"]
 
+def _overlay_kickoffs(fx):
+    """Attach the freshest kickoff time at serve-time (not just at refresh-time),
+    so kickoffs that finish loading AFTER a fixtures refresh still show up
+    immediately on the next request instead of waiting up to REFRESH_HOURS."""
+    out = []
+    for f in fx:
+        f2 = dict(f)
+        f2["kickoff"] = kickoffs.kickoff_for(f["home"], f["away"], f["date"]) or f.get("kickoff")
+        out.append(f2)
+    return out
+
 @app.get("/api/fixtures")
 def get_fixtures(div: Optional[str] = Query(None)):
     with LOCK:
         fx = CACHE["fixtures"]
         if div and div != "ALL":
             fx = [f for f in fx if f["div"] == div]
-        return {"updated_at": CACHE["updated_at"], "fixtures": fx}
+        return {"updated_at": CACHE["updated_at"], "fixtures": _overlay_kickoffs(fx)}
 
 @app.get("/api/backtest")
 def get_backtest(div: str, edge: float = 0.05):
@@ -547,6 +560,7 @@ def live_radar():
     """Rank today's fixtures by how likely goals are to flow (good for live 'over')."""
     with LOCK:
         fx = list(CACHE["fixtures"])
+    fx = _overlay_kickoffs(fx)
     out = []
     for f in fx:
         goals = next((g for g in f["groups"] if g["name"] == "Goluri"), None)
@@ -587,6 +601,11 @@ def get_kickoffs_debug():
     with kickoffs.KICK_LOCK:
         return {**kickoffs.KICK_STATE, "key_set": bool(kickoffs.AF_KEY), "tz": kickoffs.TZ}
 
+@app.get("/api/euro-fixtures")
+def get_euro_fixtures():
+    """Champions/Europa/Conference League: schedule only (no xG — see note in kickoffs.py)."""
+    return {"fixtures": kickoffs.get_euro_fixtures(), "note": "fără predicție xG — doar programul"}
+
 @app.get("/api/journal")
 def get_journal(limit: int = Query(100, ge=1, le=500), settled: bool = False):
     return {"entries": journal.entries(limit=limit, only_settled=settled),
@@ -599,6 +618,44 @@ def get_journal_stats():
 @app.get("/api/journal/debug")
 def get_journal_debug():
     return journal.STATE
+
+# ---- bet ledger (only bets I actually place) ----
+@app.get("/api/ledger/summary")
+def ledger_summary():
+    return ledger.summary()
+
+@app.get("/api/ledger/config")
+def ledger_get_config():
+    return ledger.get_config()
+
+@app.post("/api/ledger/config")
+def ledger_set_config(payload: dict = Body(...)):
+    return ledger.set_config(payload or {})
+
+@app.get("/api/bets")
+def ledger_bets(limit: int = Query(200, ge=1, le=500), status: str = None):
+    return {"bets": ledger.bets(limit=limit, status=status),
+            "suggested_stake": ledger.suggest_stake(), "bank": ledger.current_bank()}
+
+@app.post("/api/bets")
+def ledger_add_bet(payload: dict = Body(...)):
+    bid = ledger.add_bet(payload or {})
+    if not bid:
+        return JSONResponse({"ok": False, "error": "date invalide (cotă/miză)"}, status_code=400)
+    return {"ok": True, "id": bid}
+
+@app.post("/api/bets/{bet_id}/settle")
+def ledger_settle_bet(bet_id: str, payload: dict = Body(...)):
+    ok = ledger.settle_manual(bet_id, (payload or {}).get("status", ""))
+    return JSONResponse({"ok": ok}, status_code=200 if ok else 400)
+
+@app.post("/api/bets/{bet_id}/delete")
+def ledger_delete_bet(bet_id: str):
+    return {"ok": ledger.delete_bet(bet_id)}
+
+@app.get("/api/ledger/debug")
+def ledger_debug():
+    return ledger.STATE
 
 # ----------------------------------------------------------------------------
 # PWA: manifest, icons (base64-embedded so no binary files to upload), service worker
@@ -678,6 +735,7 @@ scheduler = BackgroundScheduler(daemon=True)
 @app.on_event("startup")
 def startup():
     journal.init()  # prediction journal storage
+    ledger.init()   # bet ledger storage
     threading.Thread(target=refresh, daemon=True).start()   # first load in background
     threading.Thread(target=keep_alive, daemon=True).start()  # prevent free-tier sleep
     scheduler.add_job(refresh, "interval", hours=REFRESH_HOURS, id="refresh")

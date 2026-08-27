@@ -252,10 +252,11 @@ def stats() -> Dict:
     b_pred = sum(r[9] for r in b_rows) / len(b_rows) if b_rows else None
     b_real = sum(r[10] for r in b_rows) / len(b_rows) if b_rows else None
 
-    # per-league
+    # per-league (full name, so tiers like "Anglia · Premier League" vs
+    # "Anglia · Championship" don't collapse into the same bucket)
     byl = {}
     for r in rows:
-        lg = (r[0] or "?").split(" · ")[0]
+        lg = r[0] or "?"
         d = byl.setdefault(lg, {"n": 0, "correct": 0})
         d["n"] += 1; d["correct"] += r[6] or 0
     per_league = sorted(
