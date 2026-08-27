@@ -52,22 +52,99 @@ const divShort=(div,league)=>DIV_SHORT[div]||(league?league.split(" · ")[0]:"")
 function Bar({p,color}){return <div style={{height:5,background:"var(--chip)",borderRadius:3,overflow:"hidden",flex:1}}>
   <div style={{width:Math.max(0,Math.min(100,p*100))+"%",height:"100%",background:color,borderRadius:3}}/></div>;}
 
-function Login({onOk}){
+function Landing({onLogin}){
+  const[stats,setStats]=useState(null);
+  useEffect(()=>{fetch(API+"/api/journal/stats").then(r=>r.json()).then(setStats).catch(()=>{});},[]);
+  const wrap={maxWidth:760,margin:"0 auto",padding:"0 20px"};
+  const card={background:"var(--panel)",border:"1px solid var(--line)",borderRadius:14,padding:"18px 18px"};
+  const pct=x=>x==null?"–":Math.round(x*100)+"%";
+
+  const FEATURES=[
+    {t:"Model Dixon-Coles",d:"Poisson bivariat ponderat în timp, antrenat pe rezultate reale, nu pe intuiție."},
+    {t:"Jurnal de predicții",d:"Fiecare prognoză se salvează înainte de meci și se compară automat cu rezultatul real."},
+    {t:"Registru cu CLV",d:"Urmărește doar pariurile puse efectiv: bancă, miză proporțională, closing line value."},
+    {t:"Live radar",d:"Ținte pre-calculate pentru pariu live, cu ora de start și reperul de așteptare."},
+    {t:"22 de ligi reale",d:"Din surse cu istoric verificabil — fără predicții inventate acolo unde nu există date."},
+    {t:"Onestitate ca principiu",d:"Cupele europene apar doar ca program, fără xG fals — mai bine fără predicție decât una ghicită."},
+  ];
+  const FAQ=[
+    {q:"De unde vin predicțiile?",a:"Dintr-un model statistic (Dixon-Coles) antrenat pe rezultate istorice reale de pe football-data.co.uk, nu din \"instinct\" sau surse nedivulgate."},
+    {q:"Sunt garantate?",a:"Nu. Niciun model nu bate constant piața. Jurnalul e public pentru tine, verificabil meci cu meci — cifrele nu sunt cosmetizate."},
+    {q:"De ce nu are predicții pentru Champions/Europa/Conference League?",a:"Sursa de date nu acoperă cupele europene cu istoric suficient. Preferăm să arătăm doar programul decât o predicție inventată."},
+    {q:"Cine vede datele mele?",a:"Doar tu. E o aplicație personală, nu un serviciu cu abonați sau tipsteri terți."},
+  ];
+
+  return <div style={{minHeight:"100vh",paddingBottom:60}}>
+    <div style={{...wrap,paddingTop:64,textAlign:"center"}}>
+      <div style={{fontSize:34,fontWeight:700,letterSpacing:-0.8}}>Forma<span style={{color:"var(--accent)"}}>·</span>Cast</div>
+      <div style={{fontSize:15.5,color:"var(--mute)",marginTop:10,lineHeight:1.6,maxWidth:480,marginLeft:"auto",marginRight:"auto"}}>
+        Model statistic pe rezultate reale, jurnal verificabil, registru cu bancă și CLV. Fără promisiuni de câștig — doar date pe care le poți controla tu.
+      </div>
+      <a href="#intra" style={{display:"inline-block",marginTop:22,padding:"12px 26px",borderRadius:10,background:"var(--accent)",color:"var(--bg)",fontWeight:700,fontSize:15,textDecoration:"none"}}>Intră în aplicație</a>
+    </div>
+
+    <div style={{...wrap,marginTop:52}}>
+      <div style={{fontSize:12,color:"var(--faint)",textTransform:"uppercase",letterSpacing:1,marginBottom:14,textAlign:"center"}}>Ce face aplicația</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:12}}>
+        {FEATURES.map(f=><div key={f.t} style={card}>
+          <div style={{fontWeight:700,fontSize:14.5,marginBottom:6}}>{f.t}</div>
+          <div style={{fontSize:12.5,color:"var(--mute)",lineHeight:1.55}}>{f.d}</div>
+        </div>)}
+      </div>
+    </div>
+
+    <div style={{...wrap,marginTop:44}}>
+      <div style={{fontSize:12,color:"var(--faint)",textTransform:"uppercase",letterSpacing:1,marginBottom:14,textAlign:"center"}}>Track record — nu vorbe, cifre</div>
+      <div style={card}>
+        {!stats||stats.settled===0?
+          <div style={{fontSize:13,color:"var(--mute)",textAlign:"center",lineHeight:1.6}}>
+            {stats&&stats.total>0?`${stats.total} predicții înregistrate, încă niciuna închisă.`:"Jurnalul se populează pe măsură ce se joacă meciurile."}<br/>
+            Cifrele apar aici automat, fără cosmetizare, de îndată ce există meciuri închise.
+          </div>
+        :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:14,textAlign:"center"}}>
+          <div><div className="mono" style={{fontSize:24,fontWeight:700,color:"var(--accent)"}}>{pct(stats.acc1x2)}</div><div style={{fontSize:11,color:"var(--faint)"}}>acuratețe 1X2</div></div>
+          <div><div className="mono" style={{fontSize:24,fontWeight:700}}>{stats.settled}</div><div style={{fontSize:11,color:"var(--faint)"}}>meciuri închise</div></div>
+          <div><div className="mono" style={{fontSize:24,fontWeight:700}}>{stats.brier}</div><div style={{fontSize:11,color:"var(--faint)"}}>scor Brier</div></div>
+        </div>}
+      </div>
+    </div>
+
+    <div style={{...wrap,marginTop:44}}>
+      <div style={{fontSize:12,color:"var(--faint)",textTransform:"uppercase",letterSpacing:1,marginBottom:14,textAlign:"center"}}>Întrebări</div>
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {FAQ.map(f=><div key={f.q} style={card}>
+          <div style={{fontWeight:700,fontSize:13.5,marginBottom:6}}>{f.q}</div>
+          <div style={{fontSize:12.5,color:"var(--mute)",lineHeight:1.55}}>{f.a}</div>
+        </div>)}
+      </div>
+    </div>
+
+    <div id="intra" style={{...wrap,marginTop:52,paddingTop:8}}>
+      <Login onOk={onLogin} embedded/>
+    </div>
+  </div>;
+}
+
+function Login({onOk,embedded}){
   const[e,setE]=useState(""),[p,setP]=useState(""),[err,setErr]=useState(""),[busy,setBusy]=useState(false);
   const go=async()=>{setBusy(true);setErr("");
     try{const[eh,ph]=await Promise.all([sha256(e.trim().toLowerCase()),sha256(p)]);
       if(eh===EMAIL_HASH&&ph===PASS_HASH)onOk();else setErr("Email sau parolă greșite.");}
     catch{setErr("Eroare.");}setBusy(false);};
   const inp={width:"100%",background:"var(--chip)",color:"var(--text)",border:"1px solid var(--line)",borderRadius:9,padding:"12px 13px",fontSize:15,marginBottom:11};
-  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-    <div style={{width:"100%",maxWidth:340}}>
-      <div style={{fontSize:26,fontWeight:700,textAlign:"center",letterSpacing:-0.5}}>Forma<span style={{color:"var(--accent)"}}>·</span>Cast</div>
-      <div style={{fontSize:12.5,color:"var(--mute)",textAlign:"center",margin:"4px 0 22px"}}>Autentificare</div>
+  const form=<div style={{width:"100%",maxWidth:340}}>
+      {!embedded&&<React.Fragment>
+        <div style={{fontSize:26,fontWeight:700,textAlign:"center",letterSpacing:-0.5}}>Forma<span style={{color:"var(--accent)"}}>·</span>Cast</div>
+        <div style={{fontSize:12.5,color:"var(--mute)",textAlign:"center",margin:"4px 0 22px"}}>Autentificare</div>
+      </React.Fragment>}
+      {embedded&&<div style={{fontSize:12.5,color:"var(--mute)",textAlign:"center",marginBottom:16}}>Autentificare</div>}
       <input style={inp} type="email" placeholder="email" value={e} autoCapitalize="none" onChange={x=>setE(x.target.value)} onKeyDown={x=>x.key==="Enter"&&go()}/>
       <input style={inp} type="password" placeholder="parolă" value={p} onChange={x=>setP(x.target.value)} onKeyDown={x=>x.key==="Enter"&&go()}/>
       {err&&<div style={{color:"var(--weak)",fontSize:12.5,marginBottom:10}}>{err}</div>}
       <button onClick={go} disabled={busy} style={{width:"100%",padding:12,borderRadius:9,border:"none",background:"var(--accent)",color:"var(--bg)",fontSize:15,fontWeight:700,opacity:busy?0.6:1}}>{busy?"…":"Intră"}</button>
-    </div></div>;
+    </div>;
+  if(embedded)return <div style={{display:"flex",justifyContent:"center"}}>{form}</div>;
+  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>{form}</div>;
 }
 
 function Board(){
@@ -660,7 +737,7 @@ function LiveRadar({panel}){
   </div>;
 }
 
-function App(){const[a,setA]=useState(false);return a?<Board/>:<Login onOk={()=>setA(true)}/>;}
+function App(){const[a,setA]=useState(false);return a?<Board/>:<Landing onLogin={()=>setA(true)}/>;}
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
 if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("/sw.js").catch(()=>{});});}
 </script>
