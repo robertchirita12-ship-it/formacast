@@ -42,13 +42,14 @@ ALIASES = {
     "man city": "manchester city", "man utd": "manchester united",
     "man united": "manchester united", "nott'm forest": "nottingham forest",
     "sheffield weds": "sheffield wednesday", "sheffield united": "sheffield united",
-    "west brom": "west bromwich", "wolves": "wolverhampton",
+    "west brom": "west bromwich albion", "wolves": "wolverhampton wanderers",
+    "newcastle": "newcastle united", "qpr": "queens park rangers",
     "ath madrid": "atletico madrid", "ath bilbao": "athletic bilbao",
     "atletico": "atletico madrid", "sp gijon": "sporting gijon",
     "espanol": "espanyol", "betis": "real betis", "sociedad": "real sociedad",
     "vallecano": "rayo vallecano", "celta": "celta vigo", "cadiz": "cadiz",
     "la coruna": "deportivo", "alaves": "alaves",
-    "inter": "inter", "milan": "ac milan", "juventus": "juventus",
+    "inter": "inter milan", "milan": "ac milan", "juventus": "juventus",
     "roma": "as roma", "napoli": "napoli", "verona": "hellas verona",
     "paris sg": "paris saint germain", "psg": "paris saint germain",
     "st etienne": "saint etienne", "m'gladbach": "borussia monchengladbach",
@@ -213,16 +214,60 @@ def kickoff_for(home: str, away: str, date_iso: str):
     for g in games:
         if g["h"] == h and g["a"] == a:
             return g["iso"]
-    # 2) fuzzy: both sides must be reasonably close; pick best combined
-    best, best_score = None, 0.0
+    # 2) fuzzy: both sides must be close, AND the best combined score must
+    # clearly beat the runner-up (protects against prefix-alike collisions
+    # like "Manchester City" vs "Manchester United" scoring similarly).
+    scored = []
     for g in games:
         sh = difflib.SequenceMatcher(None, h, g["h"]).ratio()
         sa = difflib.SequenceMatcher(None, a, g["a"]).ratio()
-        if sh >= 0.55 and sa >= 0.55:
-            score = sh + sa
-            if score > best_score:
-                best, best_score = g, score
-    return best["iso"] if best else None
+        if sh >= 0.60 and sa >= 0.60:
+            scored.append((sh + sa, g))
+    if not scored:
+        return None
+    scored.sort(key=lambda x: -x[0])
+    top_score, top_g = scored[0]
+    runner_up = scored[1][0] if len(scored) > 1 else 0.0
+    if (top_score - runner_up) >= 0.15 or len(scored) == 1:
+        return top_g["iso"]
+    return None
+
+
+def get_all_upcoming(min_date_iso: str = None) -> List[dict]:
+    """Flat list of {h,a,iso} (normalized names) across the cached window,
+    used to SUPPLEMENT divisions where football-data.co.uk's shared
+    fixtures.csv has no upcoming rows (it only lists 'the next round',
+    so most divisions are often empty on any given day)."""
+    with KICK_LOCK:
+        out = []
+        for d, games in BYDATE.items():
+            if min_date_iso and d < min_date_iso:
+                continue
+            out.extend(games)
+        return out
+
+
+def resolve_team(norm_name: str, norm_to_raw: Dict[str, str]) -> str:
+    """Map a normalized API-Football team name to the exact string used in a
+    division's model (e.g. football-data's 'Man City'), via alias/exact match
+    first, then a careful fuzzy fallback. Character-ratio alone can't tell
+    'Manchester City' from 'Manchester United' (both score ~0.80 against
+    similarly-prefixed names), so we also require the best match to clearly
+    beat the runner-up — an ambiguous case returns None rather than a guess."""
+    if norm_name in norm_to_raw:
+        return norm_to_raw[norm_name]
+    scored = []
+    for cand, raw in norm_to_raw.items():
+        s = difflib.SequenceMatcher(None, norm_name, cand).ratio()
+        scored.append((s, raw))
+    if not scored:
+        return None
+    scored.sort(key=lambda x: -x[0])
+    top_score, top_raw = scored[0]
+    runner_up = scored[1][0] if len(scored) > 1 else 0.0
+    if top_score >= 0.82 and (top_score - runner_up) >= 0.12:
+        return top_raw
+    return None
 
 
 def get_euro_fixtures():

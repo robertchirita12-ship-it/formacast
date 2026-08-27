@@ -374,10 +374,10 @@ def refresh():
             HIST[div] = hist  # reused by /api/backtest
             out_leagues.append({"div": div, "league": name})
 
+            div_fixtures = []  # raw {home,away,date} dicts to build markets from
             for f in fixtures_all:
                 if f.get("played"):
                     continue
-                # assign each fixture to the right league by its Div code (fallback: team membership)
                 if f.get("div"):
                     if f["div"] != div:
                         continue
@@ -387,6 +387,32 @@ def refresh():
                     continue
                 if not f["date"] or f["date"] < today:
                     continue
+                div_fixtures.append({"home": f["home"], "away": f["away"], "date": f["date"]})
+
+            # football-data's shared fixtures.csv only lists "the next round", so
+            # most divisions are often empty here on any given day. Supplement
+            # from API-Football (already fetched for kickoffs) matched by name.
+            if not div_fixtures:
+                norm_to_raw = {kickoffs._norm(t): t for t in ft_model["ti"].keys()}
+                seen = set()
+                for g in kickoffs.get_all_upcoming(today.isoformat()):
+                    h_raw = kickoffs.resolve_team(g["h"], norm_to_raw)
+                    a_raw = kickoffs.resolve_team(g["a"], norm_to_raw)
+                    if not h_raw or not a_raw or h_raw == a_raw:
+                        continue
+                    try:
+                        fdate = date.fromisoformat(g["iso"][:10])
+                    except ValueError:
+                        continue
+                    if fdate < today:
+                        continue
+                    key = (h_raw, a_raw, fdate)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    div_fixtures.append({"home": h_raw, "away": a_raw, "date": fdate, "_iso": g["iso"]})
+
+            for f in div_fixtures:
                 mk = build_markets(ft_model, fh_model, cstats, f)
                 if not mk:
                     continue
@@ -394,7 +420,7 @@ def refresh():
                 out_fixtures.append({
                     "id": fid, "div": div, "league": name,
                     "date": f["date"].isoformat(), "home": f["home"], "away": f["away"],
-                    "kickoff": kickoffs.kickoff_for(f["home"], f["away"], f["date"].isoformat()),
+                    "kickoff": f.get("_iso") or kickoffs.kickoff_for(f["home"], f["away"], f["date"].isoformat()),
                     **mk,
                 })
 
