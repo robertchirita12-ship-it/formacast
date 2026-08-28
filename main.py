@@ -65,7 +65,7 @@ RHO = -0.08
 MAXG = 8
 HEADERS = {"User-Agent": "Mozilla/5.0 (FormaCast data fetcher)"}
 
-CACHE: Dict = {"updated_at": None, "leagues": [], "fixtures": [], "error": None}
+CACHE: Dict = {"updated_at": None, "leagues": [], "fixtures": [], "error": None, "failed_divs": []}
 HIST: Dict = {}        # div -> raw historical matches (reused by backtest)
 BACKTESTS: Dict = {}   # div -> {status, metrics...}
 LOCK = threading.Lock()
@@ -384,81 +384,93 @@ def refresh():
         fx_text = fetch_text_cached(f"{BASE}/fixtures.csv")
         fixtures_all = parse_csv(fx_text) if fx_text else []
         out_leagues, out_fixtures = [], []
+        failed_divs = []
         today = date.today()
 
         for div, (name, seasons) in LEAGUES.items():
-            hist = []
-            for s in seasons:
-                t = fetch_text_cached(f"{BASE}/mmz4281/{s}/{div}.csv")
-                if t:
-                    hist += [g for g in parse_csv(t) if g["played"]]
-                time.sleep(1)  # be polite to the source
-            if not hist:
+            try:
+                hist = []
+                for s in seasons:
+                    t = fetch_text_cached(f"{BASE}/mmz4281/{s}/{div}.csv")
+                    if t:
+                        hist += [g for g in parse_csv(t) if g["played"]]
+                    time.sleep(1)  # be polite to the source
+                if not hist:
+                    continue
+                valid_dates = [g["date"] for g in hist if g["date"]]
+                if not valid_dates:
+                    print(f"refresh: {div} skipped — niciun rând cu dată validă")
+                    continue
+                ref = max(valid_dates)
+                ft_model = fit_dc(hist, ref, "fthg", "ftag")
+                has_ht = any(g["hthg"] is not None for g in hist)
+                fh_model = fit_dc(hist, ref, "hthg", "htag") if has_ht else None
+                cstats = corner_stats([g for g in hist if g["date"] and (ref - g["date"]).days < 400])
+                if not ft_model:
+                    continue
+                HIST[div] = hist  # reused by /api/backtest
+                out_leagues.append({"div": div, "league": name})
+
+                div_fixtures = []  # raw {home,away,date} dicts to build markets from
+                for f in fixtures_all:
+                    if f.get("played"):
+                        continue
+                    if f.get("div"):
+                        if f["div"] != div:
+                            continue
+                    elif f["home"] not in ft_model["ti"] or f["away"] not in ft_model["ti"]:
+                        continue
+                    if f["home"] not in ft_model["ti"] or f["away"] not in ft_model["ti"]:
+                        continue
+                    if not f["date"] or f["date"] < today:
+                        continue
+                    div_fixtures.append({"home": f["home"], "away": f["away"], "date": f["date"]})
+
+                # football-data's shared fixtures.csv only lists "the next round", so
+                # most divisions are often empty here on any given day. Supplement
+                # from API-Football (already fetched for kickoffs) matched by name.
+                if not div_fixtures:
+                    norm_to_raw = {kickoffs._norm(t): t for t in ft_model["ti"].keys()}
+                    seen = set()
+                    for g in kickoffs.get_all_upcoming(today.isoformat()):
+                        h_raw = kickoffs.resolve_team(g["h"], norm_to_raw)
+                        a_raw = kickoffs.resolve_team(g["a"], norm_to_raw)
+                        if not h_raw or not a_raw or h_raw == a_raw:
+                            continue
+                        try:
+                            fdate = date.fromisoformat(g["iso"][:10])
+                        except ValueError:
+                            continue
+                        if fdate < today:
+                            continue
+                        key = (h_raw, a_raw, fdate)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        div_fixtures.append({"home": h_raw, "away": a_raw, "date": fdate, "_iso": g["iso"]})
+
+                for f in div_fixtures:
+                    mk = build_markets(ft_model, fh_model, cstats, f)
+                    if not mk:
+                        continue
+                    fid = hashlib.sha1(f"{div}{f['date']}{f['home']}{f['away']}".encode()).hexdigest()[:12]
+                    out_fixtures.append({
+                        "id": fid, "div": div, "league": name,
+                        "date": f["date"].isoformat(), "home": f["home"], "away": f["away"],
+                        "kickoff": f.get("_iso") or kickoffs.kickoff_for(f["home"], f["away"], f["date"].isoformat()),
+                        **mk,
+                    })
+            except Exception as div_err:
+                # one broken division must NEVER wipe out every other league's fixtures
+                print(f"refresh: {div} a esuat, sar peste — {div_err}")
+                failed_divs.append({"div": div, "error": str(div_err)[:150]})
                 continue
-            ref = max(g["date"] for g in hist if g["date"])
-            ft_model = fit_dc(hist, ref, "fthg", "ftag")
-            has_ht = any(g["hthg"] is not None for g in hist)
-            fh_model = fit_dc(hist, ref, "hthg", "htag") if has_ht else None
-            cstats = corner_stats([g for g in hist if g["date"] and (ref - g["date"]).days < 400])
-            if not ft_model:
-                continue
-            HIST[div] = hist  # reused by /api/backtest
-            out_leagues.append({"div": div, "league": name})
-
-            div_fixtures = []  # raw {home,away,date} dicts to build markets from
-            for f in fixtures_all:
-                if f.get("played"):
-                    continue
-                if f.get("div"):
-                    if f["div"] != div:
-                        continue
-                elif f["home"] not in ft_model["ti"] or f["away"] not in ft_model["ti"]:
-                    continue
-                if f["home"] not in ft_model["ti"] or f["away"] not in ft_model["ti"]:
-                    continue
-                if not f["date"] or f["date"] < today:
-                    continue
-                div_fixtures.append({"home": f["home"], "away": f["away"], "date": f["date"]})
-
-            # football-data's shared fixtures.csv only lists "the next round", so
-            # most divisions are often empty here on any given day. Supplement
-            # from API-Football (already fetched for kickoffs) matched by name.
-            if not div_fixtures:
-                norm_to_raw = {kickoffs._norm(t): t for t in ft_model["ti"].keys()}
-                seen = set()
-                for g in kickoffs.get_all_upcoming(today.isoformat()):
-                    h_raw = kickoffs.resolve_team(g["h"], norm_to_raw)
-                    a_raw = kickoffs.resolve_team(g["a"], norm_to_raw)
-                    if not h_raw or not a_raw or h_raw == a_raw:
-                        continue
-                    try:
-                        fdate = date.fromisoformat(g["iso"][:10])
-                    except ValueError:
-                        continue
-                    if fdate < today:
-                        continue
-                    key = (h_raw, a_raw, fdate)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    div_fixtures.append({"home": h_raw, "away": a_raw, "date": fdate, "_iso": g["iso"]})
-
-            for f in div_fixtures:
-                mk = build_markets(ft_model, fh_model, cstats, f)
-                if not mk:
-                    continue
-                fid = hashlib.sha1(f"{div}{f['date']}{f['home']}{f['away']}".encode()).hexdigest()[:12]
-                out_fixtures.append({
-                    "id": fid, "div": div, "league": name,
-                    "date": f["date"].isoformat(), "home": f["home"], "away": f["away"],
-                    "kickoff": f.get("_iso") or kickoffs.kickoff_for(f["home"], f["away"], f["date"].isoformat()),
-                    **mk,
-                })
 
         out_fixtures.sort(key=lambda x: x["date"])
         with LOCK:
             CACHE.update({"updated_at": datetime.utcnow().isoformat() + "Z",
-                          "leagues": out_leagues, "fixtures": out_fixtures, "error": None})
+                          "leagues": out_leagues, "fixtures": out_fixtures, "error": None,
+                          "failed_divs": failed_divs})
         # prediction journal: record new pre-match forecasts, settle any now played
         try:
             journal.record(out_fixtures)
@@ -574,7 +586,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 def health():
     with LOCK:
         return {"updated_at": CACHE["updated_at"], "leagues": len(CACHE["leagues"]),
-                "fixtures": len(CACHE["fixtures"]), "error": CACHE["error"]}
+                "fixtures": len(CACHE["fixtures"]), "error": CACHE["error"],
+                "failed_divs": CACHE.get("failed_divs", [])}
 
 @app.get("/api/leagues")
 def get_leagues():
